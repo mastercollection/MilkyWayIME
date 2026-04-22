@@ -1,0 +1,7 @@
+{
+  "id": "ko_dubeolsik",
+  "displayName": "Korean Dubeolsik",
+  "type": "korean",
+  "basePhysicalLayout": "us_qwerty",
+  "mappingModel": "relative"
+}

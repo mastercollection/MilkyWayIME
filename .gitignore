@@ -1,0 +1,10 @@
+/build/
+/out/
+/.vs/
+/CMakeUserPresets.json
+/Testing/
+/build-*/
+/references/
+/external/*
+!/external/libhangul/
+!/external/libhangul
