@@ -23,19 +23,22 @@ const layout::KoreanLayoutId& InputSession::korean_layout_id() const {
   return korean_layout_id_;
 }
 
-void InputSession::StartComposition() {
+void InputSession::StartComposition(std::string preedit) {
   is_composing_ = true;
-  snapshot_.preedit.clear();
+  snapshot_.preedit = std::move(preedit);
+  last_end_reason_ = CompositionEndReason::kNone;
 }
 
 void InputSession::UpdateComposition(std::string preedit) {
   is_composing_ = true;
   snapshot_.preedit = std::move(preedit);
+  last_end_reason_ = CompositionEndReason::kNone;
 }
 
-void InputSession::EndComposition() {
+void InputSession::EndComposition(CompositionEndReason reason) {
   is_composing_ = false;
   snapshot_.preedit.clear();
+  last_end_reason_ = reason;
 }
 
 bool InputSession::IsComposing() const {
@@ -44,6 +47,10 @@ bool InputSession::IsComposing() const {
 
 const composition::CompositionSnapshot& InputSession::snapshot() const {
   return snapshot_;
+}
+
+CompositionEndReason InputSession::last_end_reason() const {
+  return last_end_reason_;
 }
 
 std::optional<hanja::CandidateRequest> InputSession::RequestHanjaConversion()

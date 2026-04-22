@@ -66,24 +66,34 @@ class LibhangulComposer final : public HangulComposer {
 
   void Reset() override { hangul_ic_reset(context_.get()); }
 
-  std::string ProcessKeySequence(std::string_view key_sequence) override {
-    std::string output;
+  HangulInputResult ProcessAscii(char ascii) override {
+    const bool consumed =
+        hangul_ic_process(context_.get(), static_cast<unsigned char>(ascii));
+    return Snapshot(consumed);
+  }
 
-    for (const unsigned char key : key_sequence) {
-      const bool consumed = hangul_ic_process(context_.get(), key);
-      output += ToUtf8(hangul_ic_get_commit_string(context_.get()));
+  HangulInputResult ProcessBackspace() override {
+    const bool consumed = hangul_ic_backspace(context_.get());
+    return Snapshot(consumed);
+  }
 
-      if (!consumed) {
-        output += ToUtf8(hangul_ic_flush(context_.get()));
-        output.push_back(static_cast<char>(key));
-      }
-    }
+  std::string GetCommitText() const override {
+    return ToUtf8(hangul_ic_get_commit_string(context_.get()));
+  }
 
-    output += ToUtf8(hangul_ic_flush(context_.get()));
-    return output;
+  std::string GetPreeditText() const override {
+    return ToUtf8(hangul_ic_get_preedit_string(context_.get()));
   }
 
  private:
+  HangulInputResult Snapshot(bool consumed) const {
+    return HangulInputResult{
+        consumed,
+        ToUtf8(hangul_ic_get_commit_string(context_.get())),
+        ToUtf8(hangul_ic_get_preedit_string(context_.get())),
+    };
+  }
+
   std::unique_ptr<HangulInputContext, HangulInputContextDeleter> context_;
 };
 

@@ -5,7 +5,7 @@
 namespace milkyway::engine::hanja {
 
 struct CandidateRequest {
-  std::string composing_text;
+  std::string composing_syllable;
 };
 
 }  // namespace milkyway::engine::hanja

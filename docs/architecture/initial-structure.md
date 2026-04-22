@@ -14,4 +14,4 @@ MilkyWayIME starts from four explicit boundaries:
 - `adapters/libhangul` is the only place where `libhangul` integration should live.
 - `mwime_core` may link the bundled static `libhangul`, but TSF code must still go through the adapter boundary.
 - Layout definitions belong in `data/layouts`, not hardcoded TSF classes.
-- Hanja conversion requests must operate on the current composing string only.
+- Hanja conversion requests must operate on the current composing syllable only.

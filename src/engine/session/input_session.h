@@ -9,6 +9,17 @@
 
 namespace milkyway::engine::session {
 
+enum class CompositionEndReason {
+  kNone,
+  kCompleted,
+  kBackspace,
+  kDelimiter,
+  kFocusLost,
+  kSelectionMoved,
+  kExternalTermination,
+  kShortcutBypass,
+};
+
 class InputSession {
  public:
   InputSession(layout::PhysicalLayoutId physical_layout_id,
@@ -20,12 +31,13 @@ class InputSession {
   const layout::PhysicalLayoutId& physical_layout_id() const;
   const layout::KoreanLayoutId& korean_layout_id() const;
 
-  void StartComposition();
+  void StartComposition(std::string preedit);
   void UpdateComposition(std::string preedit);
-  void EndComposition();
+  void EndComposition(CompositionEndReason reason);
 
   bool IsComposing() const;
   const composition::CompositionSnapshot& snapshot() const;
+  CompositionEndReason last_end_reason() const;
 
   std::optional<hanja::CandidateRequest> RequestHanjaConversion() const;
 
@@ -34,6 +46,7 @@ class InputSession {
   layout::KoreanLayoutId korean_layout_id_;
   bool is_composing_ = false;
   composition::CompositionSnapshot snapshot_;
+  CompositionEndReason last_end_reason_ = CompositionEndReason::kNone;
 };
 
 }  // namespace milkyway::engine::session

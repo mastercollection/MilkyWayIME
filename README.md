@@ -6,7 +6,7 @@ MilkyWayIME is a Korean TSF IME project for Windows.
 
 - Separate the physical English layout from the Korean layout mapping.
 - Interpret shortcuts consistently from the selected physical English layout.
-- Support Hanja candidate selection from the current composing Korean string.
+- Support Hanja candidate selection from the current composing Korean syllable.
 - Keep the project extensible for future custom layouts.
 
 ## libhangul
@@ -25,7 +25,7 @@ This repository currently contains the initial project skeleton:
 
 - `CMake` root build files
 - `src/engine` for layout, session, and shortcut model boundaries
-- `src/tsf` for the future Windows TSF adapter layer
+- `src/tsf` for the initial Windows TSF composition lifecycle layer
 - `src/adapters/libhangul` for the statically linked `libhangul` integration boundary
 - `data/layouts` for data-driven layout definitions
 - `tests` for unit, layout, and integration test structure

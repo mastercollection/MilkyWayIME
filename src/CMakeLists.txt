@@ -46,12 +46,19 @@ target_include_directories(mwime_core
 target_compile_features(mwime_core PUBLIC cxx_std_20)
 target_link_libraries(mwime_core PUBLIC mwime_libhangul)
 
-add_library(mwime_tsf SHARED
-    tsf/exports.cpp
+add_library(mwime_tsf_support STATIC
+    tsf/edit/composition_edit_session.cpp
     tsf/service/text_service.cpp
 )
+target_include_directories(mwime_tsf_support PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(mwime_tsf_support PRIVATE mwime_core)
+target_compile_features(mwime_tsf_support PRIVATE cxx_std_20)
+
+add_library(mwime_tsf SHARED
+    tsf/exports.cpp
+)
 target_include_directories(mwime_tsf PRIVATE ${PROJECT_SOURCE_DIR}/src)
-target_link_libraries(mwime_tsf PRIVATE mwime_core)
+target_link_libraries(mwime_tsf PRIVATE mwime_tsf_support)
 target_compile_features(mwime_tsf PRIVATE cxx_std_20)
 
 function(mwime_enable_warnings target_name)
@@ -63,4 +70,5 @@ function(mwime_enable_warnings target_name)
 endfunction()
 
 mwime_enable_warnings(mwime_core)
+mwime_enable_warnings(mwime_tsf_support)
 mwime_enable_warnings(mwime_tsf)

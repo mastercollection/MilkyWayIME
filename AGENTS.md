@@ -15,7 +15,7 @@ This document defines the working rules for agents operating in `D:\Git\MilkyWay
 - Support multiple physical/base English layouts that define how keys are interpreted.
 - Support multiple Korean layouts defined relative to the selected physical English layout.
 - Interpret shortcuts consistently according to the selected physical English layout in both Korean and English input states, including `Ctrl`, `Alt`, `Win`, and `Shift`.
-- Support Hanja candidate selection from the currently composing Korean string when the Hanja key is invoked.
+- Support Hanja candidate selection from the currently composing Korean syllable when the Hanja key is invoked.
 - Keep the structure extensible so user-defined custom layouts can be supported later.
 
 ## Design Principles
@@ -26,7 +26,7 @@ This document defines the working rules for agents operating in `D:\Git\MilkyWay
 - A Korean layout must be defined relative to the currently selected physical English layout, not as an isolated absolute key map.
 - Shortcut interpretation must behave consistently based on the currently selected physical English layout.
 - Delegate Korean composition logic to `libhangul`, while keeping layout selection and event forwarding responsibilities clear inside this project.
-- Hanja conversion must operate only on the currently composing Korean string, not on already committed text.
+- Hanja conversion must operate only on the currently composing Korean syllable, not on already committed text.
 - Do not hardcode around built-in layouts only. Prefer data-driven structures that can later accommodate user-defined layouts.
 
 ## Implementation Notes
@@ -43,7 +43,7 @@ This document defines the working rules for agents operating in `D:\Git\MilkyWay
 - Verify that the selected physical English layout is interpreted correctly.
 - Verify that each Korean layout is mapped correctly relative to the selected physical English layout.
 - Verify that shortcut combinations using `Ctrl`, `Alt`, `Win`, and `Shift` are handled consistently in both Korean and English states.
-- Verify that invoking the Hanja key during composition opens a candidate window for the current composing string and that selecting a candidate replaces that composing string correctly.
+- Verify that invoking the Hanja key during composition opens a candidate window for the current composing syllable and that selecting a candidate replaces that syllable correctly.
 - Verify that adding a new layout or custom layout support does not regress behavior for existing layouts.
 
 ## Documentation Rules

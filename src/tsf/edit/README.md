@@ -1,3 +1,3 @@
 # Edit Session Layer
 
-TSF edit session wrappers and composition text updates belong here.
+Composition start, update, and end session helpers belong here.
