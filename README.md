@@ -65,3 +65,20 @@ Run tests:
 ```sh
 ctest --preset debug
 ```
+
+Use the MSVC presets when you want `Ninja` builds backed by the latest
+installed Visual Studio x64 toolchain:
+
+```sh
+cmake --preset msvc-debug
+cmake --build --preset msvc-debug
+ctest --preset msvc-debug
+
+cmake --preset msvc-release
+cmake --build --preset msvc-release
+ctest --preset msvc-release
+```
+
+For now, run the `msvc-*` build and test presets from a Visual Studio
+Developer Command Prompt or Developer PowerShell so the MSVC include and
+library environment is available to `Ninja`.
