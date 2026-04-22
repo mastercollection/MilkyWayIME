@@ -17,6 +17,7 @@ MilkyWayIME delegates Hangul composition to `libhangul`.
 - Layout selection, key normalization, shortcut resolution, and session state stay in the project.
 - The actual Hangul composition engine is isolated behind `src/adapters/libhangul/`.
 - The upstream dependency is included as the `external/libhangul` git submodule.
+- `mwime_core` statically links the bundled `libhangul` sources during the project build.
 
 ## Current Status
 
@@ -25,7 +26,7 @@ This repository currently contains the initial project skeleton:
 - `CMake` root build files
 - `src/engine` for layout, session, and shortcut model boundaries
 - `src/tsf` for the future Windows TSF adapter layer
-- `src/adapters/libhangul` for the `libhangul` integration boundary
+- `src/adapters/libhangul` for the statically linked `libhangul` integration boundary
 - `data/layouts` for data-driven layout definitions
 - `tests` for unit, layout, and integration test structure
 

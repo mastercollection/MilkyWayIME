@@ -1,5 +1,6 @@
 #include <cassert>
 
+#include "adapters/libhangul/hangul_composer.h"
 #include "engine/key/physical_key.h"
 #include "engine/layout/layout_registry.h"
 #include "engine/session/input_session.h"
@@ -49,6 +50,11 @@ int main() {
   empty_layout_query.physical_layout.clear();
   assert(resolver.Resolve(empty_layout_query) ==
          milkyway::engine::shortcut::ShortcutAction::kNone);
+
+  auto composer = milkyway::adapters::libhangul::CreateLibhangulComposer();
+  assert(composer != nullptr);
+  assert(composer->ProcessKeySequence("gksrmf") ==
+         "\xED\x95\x9C\xEA\xB8\x80");
 
   return 0;
 }
