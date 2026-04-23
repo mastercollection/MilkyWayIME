@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>18.0</VCProjectVersion>
+    <ProjectGuid>{5778D08D-602D-4E30-AF68-2BAA4242CF8B}</ProjectGuid>
+    <Keyword>Win32Proj</Keyword>
+    <RootNamespace>MilkyWayIME.Internal</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <PlatformToolset>v145</PlatformToolset>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings" />
+  <ImportGroup Label="Shared" />
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+    <Import Project="MilkyWayIME.Common.props" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+    <Import Project="MilkyWayIME.Common.props" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <PreprocessorDefinitions>_LIB;LIBHANGUL_DEFAULT_HANJA_DIC="$(SolutionDir)external\libhangul\data\hanja\hanja.txt";LIBHANGUL_DATA_DIR="$(SolutionDir)external\libhangul\data";TOP_SRCDIR="$(SolutionDir)external\libhangul";%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="src\adapters\libhangul\libhangul_composer.cpp" />
+    <ClCompile Include="src\engine\layout\layout_registry.cpp" />
+    <ClCompile Include="src\engine\session\input_session.cpp" />
+    <ClCompile Include="src\engine\shortcut\shortcut_resolver.cpp" />
+    <ClCompile Include="src\tsf\edit\composition_edit_session.cpp" />
+    <ClCompile Include="src\tsf\edit\text_edit_plan.cpp" />
+    <ClCompile Include="src\tsf\edit\tsf_text_edit_sink.cpp" />
+    <ClCompile Include="src\tsf\langbar\input_mode_lang_bar_item.cpp" />
+    <ClCompile Include="src\tsf\registration\text_service_registration.cpp" />
+    <ClCompile Include="src\tsf\service\module_state.cpp" />
+    <ClCompile Include="src\tsf\service\text_service.cpp" />
+    <ClCompile Include="src\tsf\service\tip_text_service.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="src\adapters\libhangul\hangul_composer.h" />
+    <ClInclude Include="src\engine\composition\composition_snapshot.h" />
+    <ClInclude Include="src\engine\hanja\candidate_request.h" />
+    <ClInclude Include="src\engine\key\base_layout_key.h" />
+    <ClInclude Include="src\engine\key\normalized_key_event.h" />
+    <ClInclude Include="src\engine\key\physical_key.h" />
+    <ClInclude Include="src\engine\layout\layout_registry.h" />
+    <ClInclude Include="src\engine\layout\layout_types.h" />
+    <ClInclude Include="src\engine\session\input_session.h" />
+    <ClInclude Include="src\engine\shortcut\shortcut_resolver.h" />
+    <ClInclude Include="src\engine\state\modifier_state.h" />
+    <ClInclude Include="src\tsf\debug\debug_log.h" />
+    <ClInclude Include="src\tsf\edit\composition_edit_session.h" />
+    <ClInclude Include="src\tsf\edit\text_edit_plan.h" />
+    <ClInclude Include="src\tsf\edit\text_edit_sink.h" />
+    <ClInclude Include="src\tsf\edit\tsf_text_edit_sink.h" />
+    <ClInclude Include="src\tsf\langbar\input_mode_lang_bar_item.h" />
+    <ClInclude Include="src\tsf\registration\text_service_registration.h" />
+    <ClInclude Include="src\tsf\service\module_state.h" />
+    <ClInclude Include="src\tsf\service\text_service.h" />
+    <ClInclude Include="src\tsf\service\tip_text_service.h" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets" />
+</Project>

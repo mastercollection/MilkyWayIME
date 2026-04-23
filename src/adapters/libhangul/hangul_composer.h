@@ -17,6 +17,7 @@ class HangulComposer {
   virtual ~HangulComposer() = default;
 
   virtual void Reset() = 0;
+  virtual std::string Flush() = 0;
   virtual HangulInputResult ProcessAscii(char ascii) = 0;
   virtual HangulInputResult ProcessBackspace() = 0;
   virtual std::string GetCommitText() const = 0;

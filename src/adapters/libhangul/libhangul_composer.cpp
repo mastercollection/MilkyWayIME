@@ -66,6 +66,10 @@ class LibhangulComposer final : public HangulComposer {
 
   void Reset() override { hangul_ic_reset(context_.get()); }
 
+  std::string Flush() override {
+    return ToUtf8(hangul_ic_flush(context_.get()));
+  }
+
   HangulInputResult ProcessAscii(char ascii) override {
     const bool consumed =
         hangul_ic_process(context_.get(), static_cast<unsigned char>(ascii));
@@ -107,6 +111,8 @@ std::unique_ptr<HangulComposer> CreateLibhangulComposer(
   if (context == nullptr) {
     return nullptr;
   }
+
+  hangul_ic_set_option(context, HANGUL_IC_OPTION_AUTO_REORDER, true);
 
   return std::make_unique<LibhangulComposer>(context);
 }

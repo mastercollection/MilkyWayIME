@@ -1,0 +1,12 @@
+#include "resource.h"
+
+#if !defined(AFX_RESOURCE_DLL) || defined(AFX_TARG_ENU)
+LANGUAGE 0x09, 0x01
+
+// Keep the brand icon first and with the lowest id so RegisterProfile(..., 0)
+// resolves to the MilkyWayIME profile icon in the shell.
+IDI_MILKYWAYIME ICON "src\\tsf\\resources\\icons\\milkyway_brand.ico"
+IDI_IME_MODE_HANGUL ICON "src\\tsf\\resources\\icons\\milkyway_mode_hangul.ico"
+IDI_IME_MODE_ALPHA ICON "src\\tsf\\resources\\icons\\milkyway_mode_alpha.ico"
+
+#endif

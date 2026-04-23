@@ -10,12 +10,19 @@
 #include "engine/shortcut/shortcut_resolver.h"
 #include "engine/state/modifier_state.h"
 #include "tsf/edit/text_edit_sink.h"
+#include "tsf/edit/text_edit_plan.h"
 #include "tsf/service/text_service.h"
 
 namespace {
 
 using milkyway::tsf::edit::TextEditOperation;
 using milkyway::tsf::edit::TextEditOperationType;
+
+constexpr std::uint16_t kVkShift = 0x10;
+constexpr std::uint16_t kVkControl = 0x11;
+constexpr std::uint16_t kVkMenu = 0x12;
+constexpr std::uint16_t kVkSpace = 0x20;
+constexpr std::uint16_t kVkLwin = 0x5B;
 
 struct RecordingEditSink final : milkyway::tsf::edit::TextEditSink {
   void Apply(const TextEditOperation& operation) override {
@@ -98,6 +105,43 @@ void TestLibhangulComposer() {
   assert(composer->GetPreeditText().empty());
 }
 
+void TestLibhangulComposerAutoReorder() {
+  auto composer = milkyway::adapters::libhangul::CreateLibhangulComposer();
+  assert(composer != nullptr);
+
+  auto step = composer->ProcessAscii('k');
+  assert(step.consumed);
+  assert(step.commit_text.empty());
+  assert(step.preedit_text == "\xE3\x85\x8F");
+
+  step = composer->ProcessAscii('d');
+  assert(step.consumed);
+  assert(step.commit_text.empty());
+  assert(step.preedit_text == "\xEC\x95\x84");
+  assert(composer->GetPreeditText() == step.preedit_text);
+}
+
+void TestLibhangulComposerShiftFinalSsangSios() {
+  auto composer = milkyway::adapters::libhangul::CreateLibhangulComposer();
+  assert(composer != nullptr);
+
+  auto step = composer->ProcessAscii('r');
+  assert(step.consumed);
+  assert(step.commit_text.empty());
+  assert(step.preedit_text == "\xE3\x84\xB1");
+
+  step = composer->ProcessAscii('k');
+  assert(step.consumed);
+  assert(step.commit_text.empty());
+  assert(step.preedit_text == "\xEA\xB0\x80");
+
+  step = composer->ProcessAscii('T');
+  assert(step.consumed);
+  assert(step.commit_text.empty());
+  assert(step.preedit_text == "\xEA\xB0\x94");
+  assert(composer->GetPreeditText() == "\xEA\xB0\x94");
+}
+
 void TestShortcutResolver(
     const milkyway::engine::layout::LayoutRegistry& registry) {
   milkyway::engine::shortcut::ShortcutResolver resolver;
@@ -105,7 +149,8 @@ void TestShortcutResolver(
   toggle_query.physical_layout = registry.DefaultPhysicalLayout().id;
   toggle_query.modifiers.ctrl = true;
   toggle_query.modifiers.shift = true;
-  toggle_query.key.virtual_key = 0x20;
+  toggle_query.base_layout_key =
+      milkyway::engine::key::BaseLayoutKey::kSpace;
 
   assert(resolver.Resolve(toggle_query) ==
          milkyway::engine::shortcut::ShortcutAction::kToggleInputMode);
@@ -116,6 +161,35 @@ void TestShortcutResolver(
          milkyway::engine::shortcut::ShortcutAction::kNone);
 }
 
+void TestLayoutRegistryEffectiveBaseLayout(
+    const milkyway::engine::layout::LayoutRegistry& registry) {
+  milkyway::engine::key::PhysicalKey key;
+  key.virtual_key = 'R';
+  const auto event = registry.NormalizeKeyEvent(
+      registry.DefaultPhysicalLayout().id, key, {},
+      milkyway::engine::key::KeyTransition::kPressed);
+  assert(event.base_layout_key == milkyway::engine::key::BaseLayoutKey::kR);
+
+  const auto shift_input = registry.ResolveHangulInput(
+      registry.DefaultKoreanLayout().id,
+      {milkyway::engine::key::BaseLayoutKey::kO, true});
+  assert(shift_input.is_mapped);
+  assert(shift_input.ascii == 'O');
+
+#if defined(_DEBUG)
+  const milkyway::engine::key::NormalizedKeyEvent swapped_event =
+      registry.NormalizeKeyEvent("test_swapped_rp", Key('P'), {},
+                                 milkyway::engine::key::KeyTransition::kPressed);
+  assert(swapped_event.base_layout_key ==
+         milkyway::engine::key::BaseLayoutKey::kR);
+  const auto swapped_input = registry.ResolveHangulInput(
+      registry.DefaultKoreanLayout().id,
+      {swapped_event.base_layout_key, false});
+  assert(swapped_input.is_mapped);
+  assert(swapped_input.ascii == 'r');
+#endif
+}
+
 void TestTextServiceLifecycle(
     const milkyway::engine::layout::LayoutRegistry& registry) {
   milkyway::engine::session::InputSession session(
@@ -123,7 +197,7 @@ void TestTextServiceLifecycle(
   RecordingEditSink sink;
   milkyway::tsf::service::TextService service(
       &session, milkyway::adapters::libhangul::CreateLibhangulComposer(),
-      &sink);
+      &sink, &registry);
 
   auto result =
       service.OnKeyEvent(Key('G'), {}, milkyway::engine::key::KeyTransition::kPressed);
@@ -212,7 +286,90 @@ void TestTextServiceLifecycle(
          milkyway::engine::session::CompositionEndReason::kDelimiter);
 }
 
-void TestTextServiceShortcutAndTermination(
+void TestTextServiceBackspaceClearsVisibleComposition(
+    const milkyway::engine::layout::LayoutRegistry& registry) {
+  milkyway::engine::session::InputSession session(
+      registry.DefaultPhysicalLayout().id, registry.DefaultKoreanLayout().id);
+  RecordingEditSink sink;
+  milkyway::tsf::service::TextService service(
+      &session, milkyway::adapters::libhangul::CreateLibhangulComposer(),
+      &sink, &registry);
+
+  auto result =
+      service.OnKeyEvent(Key('D'), {}, milkyway::engine::key::KeyTransition::kPressed);
+  assert(result.preedit_text == "\xE3\x85\x87");
+  result =
+      service.OnKeyEvent(Key('K'), {}, milkyway::engine::key::KeyTransition::kPressed);
+  assert(result.preedit_text == "\xEC\x95\x84");
+  assert(session.IsComposing());
+  assert(session.snapshot().preedit == "\xEC\x95\x84");
+
+  result = service.OnKeyEvent(Key(0x08), {},  // VK_BACK
+                              milkyway::engine::key::KeyTransition::kPressed);
+  assert(result.category == milkyway::tsf::service::KeyEventCategory::kBackspace);
+  assert(result.eaten);
+  assert(!result.should_forward);
+  assert(result.commit_text.empty());
+  assert(result.preedit_text == "\xE3\x85\x87");
+  assert(session.IsComposing());
+  assert(session.snapshot().preedit == "\xE3\x85\x87");
+
+  result = service.OnKeyEvent(Key(0x08), {},  // VK_BACK
+                              milkyway::engine::key::KeyTransition::kPressed);
+  assert(result.category == milkyway::tsf::service::KeyEventCategory::kBackspace);
+  assert(result.eaten);
+  assert(!result.should_forward);
+  assert(result.commit_text.empty());
+  assert(result.preedit_text.empty());
+  assert(!session.IsComposing());
+  assert(session.snapshot().preedit.empty());
+  assert(session.last_end_reason() ==
+         milkyway::engine::session::CompositionEndReason::kBackspace);
+  assert(sink.operations.size() == 5);
+  AssertOperation(sink.operations[2], TextEditOperationType::kUpdateComposition,
+                  "\xE3\x85\x87");
+  AssertOperation(sink.operations[3], TextEditOperationType::kUpdateComposition,
+                  "");
+  AssertOperation(sink.operations[4], TextEditOperationType::kEndComposition,
+                  "");
+}
+
+void TestTextServiceAutoReorder(
+    const milkyway::engine::layout::LayoutRegistry& registry) {
+  milkyway::engine::session::InputSession session(
+      registry.DefaultPhysicalLayout().id, registry.DefaultKoreanLayout().id);
+  RecordingEditSink sink;
+  milkyway::tsf::service::TextService service(
+      &session, milkyway::adapters::libhangul::CreateLibhangulComposer(),
+      &sink, &registry);
+
+  auto result =
+      service.OnKeyEvent(Key('K'), {}, milkyway::engine::key::KeyTransition::kPressed);
+  assert(result.category ==
+         milkyway::tsf::service::KeyEventCategory::kHangulAscii);
+  assert(result.eaten);
+  assert(result.preedit_text == "\xE3\x85\x8F");
+  assert(session.IsComposing());
+  assert(session.snapshot().preedit == "\xE3\x85\x8F");
+  assert(sink.operations.size() == 1);
+  AssertOperation(sink.operations[0], TextEditOperationType::kStartComposition,
+                  "\xE3\x85\x8F");
+
+  result =
+      service.OnKeyEvent(Key('D'), {}, milkyway::engine::key::KeyTransition::kPressed);
+  assert(result.category ==
+         milkyway::tsf::service::KeyEventCategory::kHangulAscii);
+  assert(result.eaten);
+  assert(result.commit_text.empty());
+  assert(result.preedit_text == "\xEC\x95\x84");
+  assert(session.IsComposing());
+  assert(session.snapshot().preedit == "\xEC\x95\x84");
+  assert(sink.operations.size() == 2);
+  AssertOperation(sink.operations[1], TextEditOperationType::kUpdateComposition,
+                  "\xEC\x95\x84");
+}
+
+void TestTextServicePrepareImeModeToggle(
     const milkyway::engine::layout::LayoutRegistry& registry) {
   {
     milkyway::engine::session::InputSession session(
@@ -220,14 +377,118 @@ void TestTextServiceShortcutAndTermination(
     RecordingEditSink sink;
     milkyway::tsf::service::TextService service(
         &session, milkyway::adapters::libhangul::CreateLibhangulComposer(),
-        &sink);
+        &sink, &registry);
+
+    service.OnKeyEvent(Key('G'), {}, milkyway::engine::key::KeyTransition::kPressed);
+    service.OnKeyEvent(Key('K'), {}, milkyway::engine::key::KeyTransition::kPressed);
+    service.OnKeyEvent(Key('S'), {}, milkyway::engine::key::KeyTransition::kPressed);
+
+    assert(service.PrepareImeModeToggle());
+    assert(!session.IsComposing());
+    assert(session.last_end_reason() ==
+           milkyway::engine::session::CompositionEndReason::kImeModeToggle);
+    assert(sink.operations.size() == 5);
+    AssertOperation(sink.operations[3], TextEditOperationType::kCommitText,
+                    "\xED\x95\x9C");
+    AssertOperation(sink.operations[4], TextEditOperationType::kEndComposition,
+                    "");
+
+    const auto result =
+        service.OnKeyEvent(Key('R'), {}, milkyway::engine::key::KeyTransition::kPressed);
+    assert(result.preedit_text == "\xE3\x84\xB1");
+    assert(session.IsComposing());
+    assert(session.snapshot().preedit == "\xE3\x84\xB1");
+  }
+
+  {
+    milkyway::engine::session::InputSession session(
+        registry.DefaultPhysicalLayout().id, registry.DefaultKoreanLayout().id);
+    RecordingEditSink sink;
+    milkyway::tsf::service::TextService service(
+        &session, milkyway::adapters::libhangul::CreateLibhangulComposer(),
+        &sink, &registry);
+
+    assert(!service.PrepareImeModeToggle());
+    assert(sink.operations.empty());
+    assert(!session.IsComposing());
+  }
+}
+
+void TestTextServiceShortcutAndTermination(
+    const milkyway::engine::layout::LayoutRegistry& registry) {
+  auto assert_pure_modifier_passthrough =
+      [&](std::uint16_t virtual_key,
+          const milkyway::engine::state::ModifierState& modifiers) {
+        milkyway::engine::session::InputSession session(
+            registry.DefaultPhysicalLayout().id,
+            registry.DefaultKoreanLayout().id);
+        RecordingEditSink sink;
+        milkyway::tsf::service::TextService service(
+            &session, milkyway::adapters::libhangul::CreateLibhangulComposer(),
+            &sink, &registry);
+
+        service.OnKeyEvent(Key('G'), {},
+                           milkyway::engine::key::KeyTransition::kPressed);
+        const std::size_t operation_count = sink.operations.size();
+        const auto result = service.OnKeyEvent(
+            Key(virtual_key), modifiers,
+            milkyway::engine::key::KeyTransition::kPressed);
+        assert(!service.WouldEatKey(
+            Key(virtual_key), modifiers,
+            milkyway::engine::key::KeyTransition::kPressed));
+        assert(result.category ==
+               milkyway::tsf::service::KeyEventCategory::kPureModifier);
+        assert(!result.eaten);
+        assert(result.should_forward);
+        assert(result.shortcut_action ==
+               milkyway::engine::shortcut::ShortcutAction::kNone);
+        assert(result.commit_text.empty());
+        assert(result.preedit_text.empty());
+        assert(session.IsComposing());
+        assert(session.snapshot().preedit == "\xE3\x85\x8E");
+        assert(sink.operations.size() == operation_count);
+      };
+
+  {
+    milkyway::engine::state::ModifierState modifiers;
+    modifiers.shift = true;
+    assert_pure_modifier_passthrough(kVkShift, modifiers);
+  }
+
+  {
+    milkyway::engine::state::ModifierState modifiers;
+    modifiers.ctrl = true;
+    assert_pure_modifier_passthrough(kVkControl, modifiers);
+  }
+
+  {
+    milkyway::engine::state::ModifierState modifiers;
+    modifiers.alt = true;
+    assert_pure_modifier_passthrough(kVkMenu, modifiers);
+  }
+
+  {
+    milkyway::engine::state::ModifierState modifiers;
+    modifiers.win = true;
+    assert_pure_modifier_passthrough(kVkLwin, modifiers);
+  }
+
+  {
+    milkyway::engine::session::InputSession session(
+        registry.DefaultPhysicalLayout().id, registry.DefaultKoreanLayout().id);
+    RecordingEditSink sink;
+    milkyway::tsf::service::TextService service(
+        &session, milkyway::adapters::libhangul::CreateLibhangulComposer(),
+        &sink, &registry);
 
     service.OnKeyEvent(Key('G'), {}, milkyway::engine::key::KeyTransition::kPressed);
     milkyway::engine::state::ModifierState modifiers;
     modifiers.ctrl = true;
     modifiers.shift = true;
+    assert(service.WouldEatKey(Key(kVkSpace), modifiers,
+                               milkyway::engine::key::KeyTransition::kPressed));
     const auto result =
-        service.OnKeyEvent(Key(0x20), modifiers,
+        service.OnKeyEvent(Key(kVkSpace), modifiers,
                            milkyway::engine::key::KeyTransition::kPressed);
     assert(result.category ==
            milkyway::tsf::service::KeyEventCategory::kModifiedShortcut);
@@ -235,6 +496,39 @@ void TestTextServiceShortcutAndTermination(
     assert(!result.should_forward);
     assert(result.shortcut_action ==
            milkyway::engine::shortcut::ShortcutAction::kToggleInputMode);
+    assert(!session.IsComposing());
+    assert(session.last_end_reason() ==
+           milkyway::engine::session::CompositionEndReason::kImeModeToggle);
+    assert(sink.operations.size() == 3);
+    AssertOperation(sink.operations[1], TextEditOperationType::kCommitText,
+                    "\xE3\x85\x8E");
+    AssertOperation(sink.operations[2], TextEditOperationType::kEndComposition,
+                    "");
+  }
+
+  {
+    milkyway::engine::session::InputSession session(
+        registry.DefaultPhysicalLayout().id, registry.DefaultKoreanLayout().id);
+    RecordingEditSink sink;
+    milkyway::tsf::service::TextService service(
+        &session, milkyway::adapters::libhangul::CreateLibhangulComposer(),
+        &sink, &registry);
+
+    service.OnKeyEvent(Key('G'), {}, milkyway::engine::key::KeyTransition::kPressed);
+    milkyway::engine::state::ModifierState modifiers;
+    modifiers.ctrl = true;
+    modifiers.alt = true;
+    assert(service.WouldEatKey(Key('O'), modifiers,
+                               milkyway::engine::key::KeyTransition::kPressed));
+    const auto result =
+        service.OnKeyEvent(Key('O'), modifiers,
+                           milkyway::engine::key::KeyTransition::kPressed);
+    assert(result.category ==
+           milkyway::tsf::service::KeyEventCategory::kModifiedShortcut);
+    assert(result.eaten);
+    assert(!result.should_forward);
+    assert(result.shortcut_action ==
+           milkyway::engine::shortcut::ShortcutAction::kOpenConfiguration);
     assert(!session.IsComposing());
     assert(session.last_end_reason() ==
            milkyway::engine::session::CompositionEndReason::kShortcutBypass);
@@ -247,7 +541,7 @@ void TestTextServiceShortcutAndTermination(
     RecordingEditSink sink;
     milkyway::tsf::service::TextService service(
         &session, milkyway::adapters::libhangul::CreateLibhangulComposer(),
-        &sink);
+        &sink, &registry);
 
     service.OnKeyEvent(Key('G'), {}, milkyway::engine::key::KeyTransition::kPressed);
     const std::size_t operation_count = sink.operations.size();
@@ -268,7 +562,7 @@ void TestTextServiceShortcutAndTermination(
     RecordingEditSink sink;
     milkyway::tsf::service::TextService service(
         &session, milkyway::adapters::libhangul::CreateLibhangulComposer(),
-        &sink);
+        &sink, &registry);
 
     service.OnKeyEvent(Key('G'), {}, milkyway::engine::key::KeyTransition::kPressed);
     const std::size_t operation_count = sink.operations.size();
@@ -289,7 +583,7 @@ void TestTextServiceShortcutAndTermination(
     RecordingEditSink sink;
     milkyway::tsf::service::TextService service(
         &session, milkyway::adapters::libhangul::CreateLibhangulComposer(),
-        &sink);
+        &sink, &registry);
 
     service.OnKeyEvent(Key('G'), {}, milkyway::engine::key::KeyTransition::kPressed);
     const std::size_t operation_count = sink.operations.size();
@@ -299,6 +593,147 @@ void TestTextServiceShortcutAndTermination(
            milkyway::engine::session::CompositionEndReason::kExternalTermination);
     assert(sink.operations.size() == operation_count);
   }
+}
+
+void TestTextServiceShiftFinalSsangSios(
+    const milkyway::engine::layout::LayoutRegistry& registry) {
+  milkyway::engine::session::InputSession session(
+      registry.DefaultPhysicalLayout().id, registry.DefaultKoreanLayout().id);
+  RecordingEditSink sink;
+  milkyway::tsf::service::TextService service(
+      &session, milkyway::adapters::libhangul::CreateLibhangulComposer(),
+      &sink, &registry);
+
+  auto result =
+      service.OnKeyEvent(Key('R'), {}, milkyway::engine::key::KeyTransition::kPressed);
+  assert(result.preedit_text == "\xE3\x84\xB1");
+  assert(session.snapshot().preedit == "\xE3\x84\xB1");
+
+  result =
+      service.OnKeyEvent(Key('K'), {}, milkyway::engine::key::KeyTransition::kPressed);
+  assert(result.preedit_text == "\xEA\xB0\x80");
+  assert(session.snapshot().preedit == "\xEA\xB0\x80");
+
+  milkyway::engine::state::ModifierState shift_modifiers;
+  shift_modifiers.shift = true;
+  const std::size_t operation_count = sink.operations.size();
+  result = service.OnKeyEvent(Key(kVkShift), shift_modifiers,
+                              milkyway::engine::key::KeyTransition::kPressed);
+  assert(result.category ==
+         milkyway::tsf::service::KeyEventCategory::kPureModifier);
+  assert(!result.eaten);
+  assert(result.should_forward);
+  assert(session.IsComposing());
+  assert(session.snapshot().preedit == "\xEA\xB0\x80");
+  assert(sink.operations.size() == operation_count);
+
+  result = service.OnKeyEvent(Key('T'), shift_modifiers,
+                              milkyway::engine::key::KeyTransition::kPressed);
+  assert(result.category ==
+         milkyway::tsf::service::KeyEventCategory::kHangulAscii);
+  assert(result.eaten);
+  assert(result.commit_text.empty());
+  assert(result.preedit_text == "\xEA\xB0\x94");
+  assert(session.IsComposing());
+  assert(session.snapshot().preedit == "\xEA\xB0\x94");
+  assert(sink.operations.size() == 3);
+  AssertOperation(sink.operations[2], TextEditOperationType::kUpdateComposition,
+                  "\xEA\xB0\x94");
+}
+
+void TestTextServiceShiftDoubleVowels(
+    const milkyway::engine::layout::LayoutRegistry& registry) {
+  {
+    milkyway::engine::session::InputSession session(
+        registry.DefaultPhysicalLayout().id, registry.DefaultKoreanLayout().id);
+    RecordingEditSink sink;
+    milkyway::tsf::service::TextService service(
+        &session, milkyway::adapters::libhangul::CreateLibhangulComposer(),
+        &sink, &registry);
+
+    milkyway::engine::state::ModifierState shift_modifiers;
+    shift_modifiers.shift = true;
+    const auto result =
+        service.OnKeyEvent(Key('O'), shift_modifiers,
+                           milkyway::engine::key::KeyTransition::kPressed);
+    assert(result.category ==
+           milkyway::tsf::service::KeyEventCategory::kHangulAscii);
+    assert(result.eaten);
+    assert(result.preedit_text == "\xE3\x85\x92");
+    assert(session.IsComposing());
+    assert(session.snapshot().preedit == "\xE3\x85\x92");
+  }
+
+  {
+    milkyway::engine::session::InputSession session(
+        registry.DefaultPhysicalLayout().id, registry.DefaultKoreanLayout().id);
+    RecordingEditSink sink;
+    milkyway::tsf::service::TextService service(
+        &session, milkyway::adapters::libhangul::CreateLibhangulComposer(),
+        &sink, &registry);
+
+    milkyway::engine::state::ModifierState shift_modifiers;
+    shift_modifiers.shift = true;
+    const auto result =
+        service.OnKeyEvent(Key('P'), shift_modifiers,
+                           milkyway::engine::key::KeyTransition::kPressed);
+    assert(result.category ==
+           milkyway::tsf::service::KeyEventCategory::kHangulAscii);
+    assert(result.eaten);
+    assert(result.preedit_text == "\xE3\x85\x96");
+    assert(session.IsComposing());
+    assert(session.snapshot().preedit == "\xE3\x85\x96");
+  }
+}
+
+void TestTextEditPlanPreservesReorderedSyllableCommit() {
+  using milkyway::tsf::edit::PlannedEditActionType;
+  using milkyway::tsf::edit::PlanTextEditActions;
+
+  const std::vector<TextEditOperation> operations = {
+      {TextEditOperationType::kCommitText, "\xEC\x9D\xB4"},
+      {TextEditOperationType::kUpdateComposition, "\xEA\xB2\x8C"},
+  };
+
+  const auto plan = PlanTextEditActions(true, operations);
+  assert(plan.size() == 3);
+  assert(plan[0].type == PlannedEditActionType::kUpdateComposition);
+  assert(plan[0].text == "\xEC\x9D\xB4");
+  assert(plan[1].type == PlannedEditActionType::kCompleteComposition);
+  assert(plan[2].type == PlannedEditActionType::kStartComposition);
+  assert(plan[2].text == "\xEA\xB2\x8C");
+}
+
+void TestTextEditPlanCompletesCommittedCompositionText() {
+  using milkyway::tsf::edit::PlannedEditActionType;
+  using milkyway::tsf::edit::PlanTextEditActions;
+
+  const std::vector<TextEditOperation> operations = {
+      {TextEditOperationType::kCommitText, "\xEC\x9D\xB4"},
+      {TextEditOperationType::kEndComposition, {}},
+  };
+
+  const auto plan = PlanTextEditActions(true, operations);
+  assert(plan.size() == 2);
+  assert(plan[0].type == PlannedEditActionType::kUpdateComposition);
+  assert(plan[0].text == "\xEC\x9D\xB4");
+  assert(plan[1].type == PlannedEditActionType::kCompleteComposition);
+}
+
+void TestTextEditPlanPreservesEmptyCompositionUpdateBeforeCompletion() {
+  using milkyway::tsf::edit::PlannedEditActionType;
+  using milkyway::tsf::edit::PlanTextEditActions;
+
+  const std::vector<TextEditOperation> operations = {
+      {TextEditOperationType::kUpdateComposition, {}},
+      {TextEditOperationType::kEndComposition, {}},
+  };
+
+  const auto plan = PlanTextEditActions(true, operations);
+  assert(plan.size() == 2);
+  assert(plan[0].type == PlannedEditActionType::kUpdateComposition);
+  assert(plan[0].text.empty());
+  assert(plan[1].type == PlannedEditActionType::kCompleteComposition);
 }
 
 }  // namespace
@@ -312,9 +747,20 @@ int main() {
 
   TestInputSession();
   TestLibhangulComposer();
+  TestLibhangulComposerAutoReorder();
+  TestLibhangulComposerShiftFinalSsangSios();
   TestShortcutResolver(registry);
+  TestLayoutRegistryEffectiveBaseLayout(registry);
   TestTextServiceLifecycle(registry);
+  TestTextServiceBackspaceClearsVisibleComposition(registry);
+  TestTextServiceAutoReorder(registry);
+  TestTextServicePrepareImeModeToggle(registry);
   TestTextServiceShortcutAndTermination(registry);
+  TestTextServiceShiftFinalSsangSios(registry);
+  TestTextServiceShiftDoubleVowels(registry);
+  TestTextEditPlanPreservesReorderedSyllableCommit();
+  TestTextEditPlanCompletesCommittedCompositionText();
+  TestTextEditPlanPreservesEmptyCompositionUpdateBeforeCompletion();
 
   return 0;
 }

@@ -14,6 +14,7 @@ enum class CompositionEndReason {
   kCompleted,
   kBackspace,
   kDelimiter,
+  kImeModeToggle,
   kFocusLost,
   kSelectionMoved,
   kExternalTermination,

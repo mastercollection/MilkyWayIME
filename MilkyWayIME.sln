@@ -1,0 +1,47 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 18
+VisualStudioVersion = 18.0.0.0
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{BC8A1FFA-BEE3-4634-8014-F334798102B3}") = "MilkyWayIME.Internal", "MilkyWayIME.Internal.vcxproj", "{5778D08D-602D-4E30-AF68-2BAA4242CF8B}"
+EndProject
+Project("{BC8A1FFA-BEE3-4634-8014-F334798102B3}") = "MilkyWayIME.Tsf", "MilkyWayIME.Tsf.vcxproj", "{B70C281A-6F10-4F73-BAE7-F130F224C16E}"
+EndProject
+Project("{BC8A1FFA-BEE3-4634-8014-F334798102B3}") = "MilkyWayIME.Tests.Unit", "MilkyWayIME.Tests.Unit.vcxproj", "{F2B5B91B-D546-4978-AB36-D3938918E54B}"
+EndProject
+Project("{BC8A1FFA-BEE3-4634-8014-F334798102B3}") = "MilkyWayIME.Tests.Tsf", "MilkyWayIME.Tests.Tsf.vcxproj", "{49E7B73F-5F9B-4614-81D8-E6B07CA9A706}"
+EndProject
+Project("{BC8A1FFA-BEE3-4634-8014-F334798102B3}") = "libhangul", "external\libhangul\libhangul.vcxproj", "{83381EEE-8813-47E6-BDCB-4F9882E81882}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|x64 = Debug|x64
+		Release|x64 = Release|x64
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{5778D08D-602D-4E30-AF68-2BAA4242CF8B}.Debug|x64.ActiveCfg = Debug|x64
+		{5778D08D-602D-4E30-AF68-2BAA4242CF8B}.Debug|x64.Build.0 = Debug|x64
+		{5778D08D-602D-4E30-AF68-2BAA4242CF8B}.Release|x64.ActiveCfg = Release|x64
+		{5778D08D-602D-4E30-AF68-2BAA4242CF8B}.Release|x64.Build.0 = Release|x64
+		{B70C281A-6F10-4F73-BAE7-F130F224C16E}.Debug|x64.ActiveCfg = Debug|x64
+		{B70C281A-6F10-4F73-BAE7-F130F224C16E}.Debug|x64.Build.0 = Debug|x64
+		{B70C281A-6F10-4F73-BAE7-F130F224C16E}.Release|x64.ActiveCfg = Release|x64
+		{B70C281A-6F10-4F73-BAE7-F130F224C16E}.Release|x64.Build.0 = Release|x64
+		{F2B5B91B-D546-4978-AB36-D3938918E54B}.Debug|x64.ActiveCfg = Debug|x64
+		{F2B5B91B-D546-4978-AB36-D3938918E54B}.Debug|x64.Build.0 = Debug|x64
+		{F2B5B91B-D546-4978-AB36-D3938918E54B}.Release|x64.ActiveCfg = Release|x64
+		{F2B5B91B-D546-4978-AB36-D3938918E54B}.Release|x64.Build.0 = Release|x64
+		{49E7B73F-5F9B-4614-81D8-E6B07CA9A706}.Debug|x64.ActiveCfg = Debug|x64
+		{49E7B73F-5F9B-4614-81D8-E6B07CA9A706}.Debug|x64.Build.0 = Debug|x64
+		{49E7B73F-5F9B-4614-81D8-E6B07CA9A706}.Release|x64.ActiveCfg = Release|x64
+		{49E7B73F-5F9B-4614-81D8-E6B07CA9A706}.Release|x64.Build.0 = Release|x64
+		{83381EEE-8813-47E6-BDCB-4F9882E81882}.Debug|x64.ActiveCfg = Debug|x64
+		{83381EEE-8813-47E6-BDCB-4F9882E81882}.Debug|x64.Build.0 = Debug|x64
+		{83381EEE-8813-47E6-BDCB-4F9882E81882}.Release|x64.ActiveCfg = Release|x64
+		{83381EEE-8813-47E6-BDCB-4F9882E81882}.Release|x64.Build.0 = Release|x64
+	EndGlobalSection
+	GlobalSection(ProjectDependencies) = postSolution
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+EndGlobal

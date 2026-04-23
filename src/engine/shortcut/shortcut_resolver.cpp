@@ -8,12 +8,12 @@ ShortcutAction ShortcutResolver::Resolve(const ShortcutQuery& query) const {
   }
 
   if (query.modifiers.ctrl && query.modifiers.shift &&
-      query.key.virtual_key == 0x20) {
+      query.base_layout_key == key::BaseLayoutKey::kSpace) {
     return ShortcutAction::kToggleInputMode;
   }
 
   if (query.modifiers.ctrl && query.modifiers.alt &&
-      query.key.virtual_key == 'O') {
+      query.base_layout_key == key::BaseLayoutKey::kO) {
     return ShortcutAction::kOpenConfiguration;
   }
 
