@@ -232,6 +232,8 @@ STDMETHODIMP TipTextService::QueryInterface(REFIID riid, void** ppv) {
     *ppv = static_cast<ITfThreadFocusSink*>(this);
   } else if (riid == IID_ITfCompartmentEventSink) {
     *ppv = static_cast<ITfCompartmentEventSink*>(this);
+  } else if (riid == IID_ITfDisplayAttributeProvider) {
+    *ppv = static_cast<ITfDisplayAttributeProvider*>(this);
   }
 
   if (*ppv == nullptr) {
@@ -333,6 +335,15 @@ STDMETHODIMP TipTextService::ActivateEx(ITfThreadMgr* thread_mgr,
     return hr;
   }
 
+  const HRESULT display_attribute_hr = InitDisplayAttributeGuidAtom();
+#if defined(_DEBUG)
+  if (FAILED(display_attribute_hr)) {
+    debug::DebugLog(
+        L"[MilkyWayIME][ActivateEx][InitDisplayAttributeGuidAtomFailed] hr=0x" +
+        FormatHex(static_cast<std::uint32_t>(display_attribute_hr)));
+  }
+#endif
+
   hr = RefreshFocusedContext();
   if (FAILED(hr)) {
 #if defined(_DEBUG)
@@ -397,6 +408,7 @@ STDMETHODIMP TipTextService::Deactivate() {
   client_id_ = TF_CLIENTID_NULL;
   activate_flags_ = 0;
   ime_open_ = true;
+  composing_display_attribute_atom_ = TF_INVALID_GUIDATOM;
   deactivating_ = false;
 #if defined(_DEBUG)
   debug::DebugLog(L"[MilkyWayIME][Deactivate][End]");
@@ -662,10 +674,13 @@ STDMETHODIMP TipTextService::OnPreservedKey(ITfContext* context, REFGUID rguid,
   return S_OK;
 }
 
-STDMETHODIMP TipTextService::OnCompositionTerminated(TfEditCookie,
+STDMETHODIMP TipTextService::OnCompositionTerminated(TfEditCookie edit_cookie,
                                                      ITfComposition* composition) {
   const bool tracked = composition_ == composition;
   if (tracked) {
+    if (composition_context_ != nullptr) {
+      ClearCompositionDisplayAttribute(edit_cookie, composition_context_);
+    }
     ClearCompositionTracking();
   }
 
@@ -723,6 +738,16 @@ STDMETHODIMP TipTextService::OnChange(REFGUID guid) {
   }
 #endif
   return S_OK;
+}
+
+STDMETHODIMP TipTextService::EnumDisplayAttributeInfo(
+    IEnumTfDisplayAttributeInfo** enum_info) {
+  return display::CreateEnumDisplayAttributeInfo(enum_info);
+}
+
+STDMETHODIMP TipTextService::GetDisplayAttributeInfo(
+    REFGUID guid_info, ITfDisplayAttributeInfo** info) {
+  return display::CreateDisplayAttributeInfo(guid_info, info);
 }
 
 TfClientId TipTextService::client_id() const {
@@ -811,6 +836,17 @@ HRESULT TipTextService::StartComposition(TfEditCookie edit_cookie,
   composition_->AddRef();
   composition_context_ = context;
   composition_context_->AddRef();
+  {
+    const HRESULT attribute_hr =
+        ApplyCompositionDisplayAttribute(edit_cookie, context, text);
+#if defined(_DEBUG)
+    if (FAILED(attribute_hr)) {
+      debug::DebugLog(
+          L"[MilkyWayIME][StartComposition][ApplyDisplayAttributeFailed] hr=0x" +
+          FormatHex(static_cast<std::uint32_t>(attribute_hr)));
+    }
+#endif
+  }
   hr = S_OK;
 
 Exit:
@@ -841,6 +877,17 @@ HRESULT TipTextService::UpdateComposition(TfEditCookie edit_cookie,
     hr = MoveSelectionToRangeEnd(edit_cookie, composition_context_,
                                  composition_range);
   }
+  if (SUCCEEDED(hr)) {
+    const HRESULT attribute_hr = ApplyCompositionDisplayAttribute(
+        edit_cookie, composition_context_, text);
+#if defined(_DEBUG)
+    if (FAILED(attribute_hr)) {
+      debug::DebugLog(
+          L"[MilkyWayIME][UpdateComposition][ApplyDisplayAttributeFailed] hr=0x" +
+          FormatHex(static_cast<std::uint32_t>(attribute_hr)));
+    }
+#endif
+  }
 
   composition_range->Release();
   return hr;
@@ -853,6 +900,9 @@ HRESULT TipTextService::CompleteComposition(TfEditCookie edit_cookie) {
 
   ITfComposition* composition = composition_;
   composition->AddRef();
+  if (composition_context_ != nullptr) {
+    ClearCompositionDisplayAttribute(edit_cookie, composition_context_);
+  }
   ClearCompositionTracking();
   const HRESULT hr = composition->EndComposition(edit_cookie);
   composition->Release();
@@ -1091,6 +1141,11 @@ void TipTextService::UnregisterPreservedKeys() {
 #if defined(_DEBUG)
   debug::DebugLog(L"[MilkyWayIME][UnregisterPreservedKeys]");
 #endif
+}
+
+HRESULT TipTextService::InitDisplayAttributeGuidAtom() {
+  return display::RegisterComposingLastSyllableDisplayAttributeAtom(
+      &composing_display_attribute_atom_);
 }
 
 HRESULT TipTextService::RefreshFocusedContext(ITfDocumentMgr* document_mgr) {
@@ -1548,6 +1603,102 @@ HRESULT TipTextService::MoveSelectionToRangeEnd(TfEditCookie edit_cookie,
   selection.style.fInterimChar = FALSE;
   hr = context->SetSelection(edit_cookie, 1, &selection);
   selection_range->Release();
+  return hr;
+}
+
+HRESULT TipTextService::ClearCompositionDisplayAttribute(
+    TfEditCookie edit_cookie, ITfContext* context) const {
+  if (context == nullptr || composition_ == nullptr) {
+    return S_FALSE;
+  }
+
+  ITfRange* composition_range = nullptr;
+  HRESULT hr = composition_->GetRange(&composition_range);
+  if (FAILED(hr)) {
+    return hr;
+  }
+
+  ITfProperty* display_attribute_property = nullptr;
+  hr = context->GetProperty(GUID_PROP_ATTRIBUTE, &display_attribute_property);
+  if (SUCCEEDED(hr)) {
+    hr = display_attribute_property->Clear(edit_cookie, composition_range);
+    display_attribute_property->Release();
+  }
+
+  composition_range->Release();
+  return hr;
+}
+
+HRESULT TipTextService::ApplyCompositionDisplayAttribute(
+    TfEditCookie edit_cookie, ITfContext* context,
+    const std::wstring& text) const {
+  if (context == nullptr || composition_ == nullptr) {
+    return S_FALSE;
+  }
+
+  ITfRange* composition_range = nullptr;
+  HRESULT hr = composition_->GetRange(&composition_range);
+  if (FAILED(hr)) {
+    return hr;
+  }
+
+  ITfProperty* display_attribute_property = nullptr;
+  hr = context->GetProperty(GUID_PROP_ATTRIBUTE, &display_attribute_property);
+  if (FAILED(hr)) {
+    composition_range->Release();
+    return hr;
+  }
+
+  hr = display_attribute_property->Clear(edit_cookie, composition_range);
+  if (FAILED(hr) || text.empty() ||
+      composing_display_attribute_atom_ == TF_INVALID_GUIDATOM) {
+    display_attribute_property->Release();
+    composition_range->Release();
+    return hr;
+  }
+
+  ITfRange* target_range = nullptr;
+  hr = composition_range->Clone(&target_range);
+  if (SUCCEEDED(hr)) {
+    const LONG last_code_point_units =
+        text.size() >= 2 && text.back() >= 0xDC00 && text.back() <= 0xDFFF &&
+                text[text.size() - 2] >= 0xD800 &&
+                text[text.size() - 2] <= 0xDBFF
+            ? 2
+            : 1;
+    const LONG text_units = static_cast<LONG>(text.size());
+    const LONG target_start = text_units - last_code_point_units;
+    LONG moved = 0;
+
+    hr = target_range->Collapse(edit_cookie, TF_ANCHOR_START);
+    if (SUCCEEDED(hr)) {
+      hr = target_range->ShiftEnd(edit_cookie, text_units, &moved, nullptr);
+    }
+    if (SUCCEEDED(hr) && moved != text_units) {
+      hr = S_FALSE;
+    }
+    if (SUCCEEDED(hr)) {
+      moved = 0;
+      hr = target_range->ShiftStart(edit_cookie, target_start, &moved, nullptr);
+    }
+    if (SUCCEEDED(hr) && moved != target_start) {
+      hr = S_FALSE;
+    }
+    if (SUCCEEDED(hr)) {
+      VARIANT value;
+      VariantInit(&value);
+      value.vt = VT_I4;
+      value.lVal = static_cast<LONG>(composing_display_attribute_atom_);
+      hr = display_attribute_property->SetValue(edit_cookie, target_range,
+                                                &value);
+    }
+  }
+
+  if (target_range != nullptr) {
+    target_range->Release();
+  }
+  display_attribute_property->Release();
+  composition_range->Release();
   return hr;
 }
 

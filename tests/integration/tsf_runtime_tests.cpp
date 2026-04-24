@@ -63,6 +63,40 @@ void TestClassFactoryAndInterfaces() {
   assert(composition_sink != nullptr);
   composition_sink->Release();
 
+  ITfDisplayAttributeProvider* display_attribute_provider = nullptr;
+  hr = unknown->QueryInterface(
+      IID_ITfDisplayAttributeProvider,
+      reinterpret_cast<void**>(&display_attribute_provider));
+  assert(SUCCEEDED(hr));
+  assert(display_attribute_provider != nullptr);
+
+  IEnumTfDisplayAttributeInfo* display_attribute_enum = nullptr;
+  hr = display_attribute_provider->EnumDisplayAttributeInfo(
+      &display_attribute_enum);
+  assert(SUCCEEDED(hr));
+  assert(display_attribute_enum != nullptr);
+
+  ITfDisplayAttributeInfo* display_attribute_info = nullptr;
+  ULONG fetched = 0;
+  hr = display_attribute_enum->Next(1, &display_attribute_info, &fetched);
+  assert(hr == S_OK);
+  assert(fetched == 1);
+  assert(display_attribute_info != nullptr);
+
+  TF_DISPLAYATTRIBUTE display_attribute = {};
+  hr = display_attribute_info->GetAttributeInfo(&display_attribute);
+  assert(SUCCEEDED(hr));
+  assert(display_attribute.crText.type == TF_CT_SYSCOLOR);
+  assert(display_attribute.crText.nIndex == COLOR_WINDOW);
+  assert(display_attribute.crBk.type == TF_CT_SYSCOLOR);
+  assert(display_attribute.crBk.nIndex == COLOR_WINDOWTEXT);
+  assert(display_attribute.lsStyle == TF_LS_NONE);
+  assert(display_attribute.bAttr == TF_ATTR_INPUT);
+
+  display_attribute_info->Release();
+  display_attribute_enum->Release();
+  display_attribute_provider->Release();
+
   unknown->Release();
   factory->Release();
   assert(milkyway::tsf::service::CanUnloadNow() == S_OK);

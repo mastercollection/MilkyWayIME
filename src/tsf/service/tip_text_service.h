@@ -18,6 +18,7 @@
 #include "engine/session/input_session.h"
 #include "engine/shortcut/shortcut_resolver.h"
 #include "engine/state/modifier_state.h"
+#include "tsf/display/display_attribute.h"
 #include "tsf/edit/tsf_text_edit_sink.h"
 #include "tsf/service/text_service.h"
 
@@ -44,7 +45,8 @@ class TipTextService final : public ITfTextInputProcessorEx,
                              public ITfKeyEventSink,
                              public ITfCompositionSink,
                              public ITfThreadFocusSink,
-                             public ITfCompartmentEventSink {
+                             public ITfCompartmentEventSink,
+                             public ITfDisplayAttributeProvider {
  public:
   static HRESULT CreateInstance(IUnknown* outer, REFIID riid, void** ppv);
 
@@ -90,6 +92,11 @@ class TipTextService final : public ITfTextInputProcessorEx,
 
   STDMETHODIMP OnChange(REFGUID guid) override;
 
+  STDMETHODIMP EnumDisplayAttributeInfo(
+      IEnumTfDisplayAttributeInfo** enum_info) override;
+  STDMETHODIMP GetDisplayAttributeInfo(REFGUID guid_info,
+                                       ITfDisplayAttributeInfo** info) override;
+
   TfClientId client_id() const;
   bool HasActiveComposition() const;
   HRESULT CommitText(TfEditCookie edit_cookie, ITfContext* context,
@@ -112,6 +119,7 @@ class TipTextService final : public ITfTextInputProcessorEx,
   void UnadviseKeyboardOpenCloseCompartmentSink();
   HRESULT RegisterPreservedKeys();
   void UnregisterPreservedKeys();
+  HRESULT InitDisplayAttributeGuidAtom();
   HRESULT SyncImeOpenFromCompartment(const wchar_t* origin);
   HRESULT RefreshFocusedContext(ITfDocumentMgr* document_mgr = nullptr);
   HRESULT AttachTextEditSink(ITfContext* context);
@@ -136,6 +144,11 @@ class TipTextService final : public ITfTextInputProcessorEx,
                             engine::shortcut::ShortcutAction action);
   HRESULT MoveSelectionToRangeEnd(TfEditCookie edit_cookie, ITfContext* context,
                                   ITfRange* range) const;
+  HRESULT ClearCompositionDisplayAttribute(TfEditCookie edit_cookie,
+                                           ITfContext* context) const;
+  HRESULT ApplyCompositionDisplayAttribute(TfEditCookie edit_cookie,
+                                           ITfContext* context,
+                                           const std::wstring& text) const;
   void SyncCompositionTermination();
   void ClearPendingKeyResult();
 
@@ -153,6 +166,7 @@ class TipTextService final : public ITfTextInputProcessorEx,
   bool ime_open_ = true;
   bool deactivating_ = false;
   bool preserved_keys_registered_ = false;
+  TfGuidAtom composing_display_attribute_atom_ = TF_INVALID_GUIDATOM;
   PendingKeyResult pending_key_result_;
   engine::layout::LayoutRegistry layout_registry_;
   engine::session::InputSession session_;

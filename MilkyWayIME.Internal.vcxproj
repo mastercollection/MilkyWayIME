@@ -44,6 +44,7 @@
     <ClCompile Include="src\engine\layout\layout_registry.cpp" />
     <ClCompile Include="src\engine\session\input_session.cpp" />
     <ClCompile Include="src\engine\shortcut\shortcut_resolver.cpp" />
+    <ClCompile Include="src\tsf\display\display_attribute.cpp" />
     <ClCompile Include="src\tsf\edit\composition_edit_session.cpp" />
     <ClCompile Include="src\tsf\edit\text_edit_plan.cpp" />
     <ClCompile Include="src\tsf\edit\tsf_text_edit_sink.cpp" />
@@ -66,6 +67,7 @@
     <ClInclude Include="src\engine\shortcut\shortcut_resolver.h" />
     <ClInclude Include="src\engine\state\modifier_state.h" />
     <ClInclude Include="src\tsf\debug\debug_log.h" />
+    <ClInclude Include="src\tsf\display\display_attribute.h" />
     <ClInclude Include="src\tsf\edit\composition_edit_session.h" />
     <ClInclude Include="src\tsf\edit\text_edit_plan.h" />
     <ClInclude Include="src\tsf\edit\text_edit_sink.h" />
