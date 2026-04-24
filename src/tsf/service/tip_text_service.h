@@ -42,7 +42,9 @@ class TipTextService final : public ITfTextInputProcessorEx,
                              public ITfThreadMgrEventSink,
                              public ITfTextEditSink,
                              public ITfKeyEventSink,
-                             public ITfCompositionSink {
+                             public ITfCompositionSink,
+                             public ITfThreadFocusSink,
+                             public ITfCompartmentEventSink {
  public:
   static HRESULT CreateInstance(IUnknown* outer, REFIID riid, void** ppv);
 
@@ -83,6 +85,11 @@ class TipTextService final : public ITfTextInputProcessorEx,
   STDMETHODIMP OnCompositionTerminated(TfEditCookie write_cookie,
                                        ITfComposition* composition) override;
 
+  STDMETHODIMP OnSetThreadFocus() override;
+  STDMETHODIMP OnKillThreadFocus() override;
+
+  STDMETHODIMP OnChange(REFGUID guid) override;
+
   TfClientId client_id() const;
   bool HasActiveComposition() const;
   HRESULT CommitText(TfEditCookie edit_cookie, ITfContext* context,
@@ -97,8 +104,15 @@ class TipTextService final : public ITfTextInputProcessorEx,
  private:
   HRESULT AdviseThreadMgrEventSink();
   void UnadviseThreadMgrEventSink();
+  HRESULT AdviseThreadFocusSink();
+  void UnadviseThreadFocusSink();
   HRESULT AdviseKeyEventSink();
   void UnadviseKeyEventSink();
+  HRESULT AdviseKeyboardOpenCloseCompartmentSink();
+  void UnadviseKeyboardOpenCloseCompartmentSink();
+  HRESULT RegisterPreservedKeys();
+  void UnregisterPreservedKeys();
+  HRESULT SyncImeOpenFromCompartment(const wchar_t* origin);
   HRESULT RefreshFocusedContext(ITfDocumentMgr* document_mgr = nullptr);
   HRESULT AttachTextEditSink(ITfContext* context);
   void DetachTextEditSink();
@@ -130,12 +144,15 @@ class TipTextService final : public ITfTextInputProcessorEx,
   TfClientId client_id_ = TF_CLIENTID_NULL;
   DWORD activate_flags_ = 0;
   DWORD thread_mgr_event_sink_cookie_ = TF_INVALID_COOKIE;
+  DWORD thread_focus_sink_cookie_ = TF_INVALID_COOKIE;
+  DWORD keyboard_openclose_compartment_sink_cookie_ = TF_INVALID_COOKIE;
   DWORD text_edit_sink_cookie_ = TF_INVALID_COOKIE;
   ITfContext* text_edit_sink_context_ = nullptr;
   ITfComposition* composition_ = nullptr;
   ITfContext* composition_context_ = nullptr;
   bool ime_open_ = true;
   bool deactivating_ = false;
+  bool preserved_keys_registered_ = false;
   PendingKeyResult pending_key_result_;
   engine::layout::LayoutRegistry layout_registry_;
   engine::session::InputSession session_;

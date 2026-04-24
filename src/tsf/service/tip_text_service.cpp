@@ -2,6 +2,7 @@
 
 #if defined(_WIN32)
 
+#include <cstdint>
 #include <array>
 #include <string>
 #include <string_view>
@@ -31,6 +32,16 @@ bool IsImeModeToggleVirtualKey(WPARAM wparam) {
   return static_cast<std::uint16_t>(wparam) == VK_HANGUL;
 }
 
+constexpr GUID kImeModePreservedKeyGuid = {
+    0x7774b3e6,
+    0xf464,
+    0x4674,
+    {0xa1, 0xcf, 0xb0, 0xed, 0xdb, 0x0e, 0x2b, 0x2a},
+};
+
+constexpr wchar_t kImeModePreservedKeyDescription[] =
+    L"MilkyWayIME Hangul toggle";
+
 std::wstring FormatHex(std::uint32_t value) {
   wchar_t buffer[16] = {};
   swprintf_s(buffer, L"%08X", value);
@@ -55,6 +66,36 @@ std::wstring Utf8ToWide(std::string_view text) {
   MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(),
                       static_cast<int>(text.size()), wide_text.data(), length);
   return wide_text;
+}
+
+std::wstring GuidToString(REFGUID guid) {
+  wchar_t buffer[39] = {};
+  if (StringFromGUID2(guid, buffer, static_cast<int>(std::size(buffer))) == 0) {
+    return L"<invalid-guid>";
+  }
+
+  return buffer;
+}
+
+std::wstring PointerToString(const void* pointer) {
+  wchar_t buffer[32] = {};
+  swprintf_s(buffer, L"%p", pointer);
+  return buffer;
+}
+
+std::wstring CurrentProcessName() {
+  wchar_t buffer[MAX_PATH] = {};
+  const DWORD length = GetModuleFileNameW(nullptr, buffer, MAX_PATH);
+  if (length == 0 || length >= MAX_PATH) {
+    return L"<unknown-process>";
+  }
+
+  const wchar_t* file_name = wcsrchr(buffer, L'\\');
+  if (file_name != nullptr && *(file_name + 1) != L'\0') {
+    return file_name + 1;
+  }
+
+  return buffer;
 }
 
 const wchar_t* CategoryName(KeyEventCategory category) {
@@ -187,6 +228,10 @@ STDMETHODIMP TipTextService::QueryInterface(REFIID riid, void** ppv) {
     *ppv = static_cast<ITfKeyEventSink*>(this);
   } else if (riid == IID_ITfCompositionSink) {
     *ppv = static_cast<ITfCompositionSink*>(this);
+  } else if (riid == IID_ITfThreadFocusSink) {
+    *ppv = static_cast<ITfThreadFocusSink*>(this);
+  } else if (riid == IID_ITfCompartmentEventSink) {
+    *ppv = static_cast<ITfCompartmentEventSink*>(this);
   }
 
   if (*ppv == nullptr) {
@@ -216,6 +261,19 @@ STDMETHODIMP TipTextService::Activate(ITfThreadMgr* thread_mgr,
 
 STDMETHODIMP TipTextService::ActivateEx(ITfThreadMgr* thread_mgr,
                                         TfClientId client_id, DWORD flags) {
+#if defined(_DEBUG)
+  debug::DebugLog(L"[MilkyWayIME][ActivateEx][Begin] process=" +
+                  CurrentProcessName() + L" pid=" +
+                  std::to_wstring(GetCurrentProcessId()) + L" tid=" +
+                  std::to_wstring(GetCurrentThreadId()) + L" client_id=" +
+                  std::to_wstring(client_id) + L" flags=0x" +
+                  FormatHex(flags) + L" immersive=" +
+                  std::to_wstring((flags & TF_TMF_IMMERSIVEMODE) ? 1 : 0) +
+                  L" secure=" +
+                  std::to_wstring((flags & TF_TMAE_SECUREMODE) ? 1 : 0) +
+                  L" comless=" +
+                  std::to_wstring((flags & TF_TMAE_COMLESS) ? 1 : 0));
+#endif
   if (thread_mgr == nullptr) {
     return E_INVALIDARG;
   }
@@ -232,33 +290,89 @@ STDMETHODIMP TipTextService::ActivateEx(ITfThreadMgr* thread_mgr,
 
   HRESULT hr = AdviseThreadMgrEventSink();
   if (FAILED(hr)) {
+#if defined(_DEBUG)
+    debug::DebugLog(L"[MilkyWayIME][ActivateEx][AdviseThreadMgrEventSinkFailed] hr=0x" +
+                    FormatHex(static_cast<std::uint32_t>(hr)));
+#endif
     Deactivate();
     return hr;
   }
 
+  hr = AdviseThreadFocusSink();
+#if defined(_DEBUG)
+  debug::DebugLog(L"[MilkyWayIME][ActivateEx][AdviseThreadFocusSink] hr=0x" +
+                  FormatHex(static_cast<std::uint32_t>(hr)) +
+                  L" cookie=" + std::to_wstring(thread_focus_sink_cookie_));
+#endif
+
   hr = AdviseKeyEventSink();
   if (FAILED(hr)) {
+#if defined(_DEBUG)
+    debug::DebugLog(L"[MilkyWayIME][ActivateEx][AdviseKeyEventSinkFailed] hr=0x" +
+                    FormatHex(static_cast<std::uint32_t>(hr)));
+#endif
+    Deactivate();
+    return hr;
+  }
+
+  hr = AdviseKeyboardOpenCloseCompartmentSink();
+#if defined(_DEBUG)
+  debug::DebugLog(
+      L"[MilkyWayIME][ActivateEx][AdviseKeyboardOpenCloseCompartmentSink] hr=0x" +
+      FormatHex(static_cast<std::uint32_t>(hr)) + L" cookie=" +
+      std::to_wstring(keyboard_openclose_compartment_sink_cookie_));
+#endif
+
+  hr = RegisterPreservedKeys();
+  if (FAILED(hr)) {
+#if defined(_DEBUG)
+    debug::DebugLog(L"[MilkyWayIME][ActivateEx][RegisterPreservedKeysFailed] hr=0x" +
+                    FormatHex(static_cast<std::uint32_t>(hr)));
+#endif
     Deactivate();
     return hr;
   }
 
   hr = RefreshFocusedContext();
   if (FAILED(hr)) {
+#if defined(_DEBUG)
+    debug::DebugLog(L"[MilkyWayIME][ActivateEx][RefreshFocusedContextFailed] hr=0x" +
+                    FormatHex(static_cast<std::uint32_t>(hr)));
+#endif
     Deactivate();
     return hr;
   }
 
   hr = AddInputModeLanguageBarItem();
   if (FAILED(hr)) {
+#if defined(_DEBUG)
+    debug::DebugLog(L"[MilkyWayIME][ActivateEx][AddInputModeLanguageBarItemFailed] hr=0x" +
+                    FormatHex(static_cast<std::uint32_t>(hr)));
+#endif
     Deactivate();
     return hr;
   }
 
   SetImeOpen(true);
+#if defined(_DEBUG)
+  debug::DebugLog(L"[MilkyWayIME][ActivateEx][End] process=" +
+                  CurrentProcessName() + L" thread_mgr=" +
+                  PointerToString(thread_mgr_) + L" text_context=" +
+                  PointerToString(text_edit_sink_context_) + L" ime_open=" +
+                  std::to_wstring(ime_open_ ? 1 : 0));
+#endif
   return S_OK;
 }
 
 STDMETHODIMP TipTextService::Deactivate() {
+#if defined(_DEBUG)
+  debug::DebugLog(L"[MilkyWayIME][Deactivate][Begin] process=" +
+                  CurrentProcessName() + L" pid=" +
+                  std::to_wstring(GetCurrentProcessId()) + L" thread_mgr=" +
+                  PointerToString(thread_mgr_) + L" text_context=" +
+                  PointerToString(text_edit_sink_context_) + L" composing=" +
+                  std::to_wstring(session_.IsComposing() ? 1 : 0));
+#endif
   deactivating_ = true;
 
   if (session_.IsComposing() && text_edit_sink_context_ != nullptr) {
@@ -272,7 +386,10 @@ STDMETHODIMP TipTextService::Deactivate() {
   edit_sink_.ClearPendingOperations();
   RemoveInputModeLanguageBarItem();
   DetachTextEditSink();
+  UnregisterPreservedKeys();
+  UnadviseKeyboardOpenCloseCompartmentSink();
   UnadviseKeyEventSink();
+  UnadviseThreadFocusSink();
   UnadviseThreadMgrEventSink();
   ClearCompositionTracking();
   SafeRelease(thread_mgr_);
@@ -281,6 +398,9 @@ STDMETHODIMP TipTextService::Deactivate() {
   activate_flags_ = 0;
   ime_open_ = true;
   deactivating_ = false;
+#if defined(_DEBUG)
+  debug::DebugLog(L"[MilkyWayIME][Deactivate][End]");
+#endif
   return S_OK;
 }
 
@@ -294,6 +414,13 @@ STDMETHODIMP TipTextService::OnUninitDocumentMgr(ITfDocumentMgr*) {
 
 STDMETHODIMP TipTextService::OnSetFocus(ITfDocumentMgr* focused,
                                         ITfDocumentMgr*) {
+#if defined(_DEBUG)
+  debug::DebugLog(L"[MilkyWayIME][OnSetFocus(DocumentMgr)] process=" +
+                  CurrentProcessName() + L" focused=" +
+                  PointerToString(focused) + L" current_text_context=" +
+                  PointerToString(text_edit_sink_context_) + L" composing=" +
+                  std::to_wstring(session_.IsComposing() ? 1 : 0));
+#endif
   if (text_edit_sink_context_ != nullptr && session_.IsComposing()) {
     logic_.OnFocusLost();
     FlushPendingOperations(text_edit_sink_context_,
@@ -305,10 +432,16 @@ STDMETHODIMP TipTextService::OnSetFocus(ITfDocumentMgr* focused,
 }
 
 STDMETHODIMP TipTextService::OnPushContext(ITfContext*) {
+#if defined(_DEBUG)
+  debug::DebugLog(L"[MilkyWayIME][OnPushContext]");
+#endif
   return RefreshFocusedContext();
 }
 
 STDMETHODIMP TipTextService::OnPopContext(ITfContext*) {
+#if defined(_DEBUG)
+  debug::DebugLog(L"[MilkyWayIME][OnPopContext]");
+#endif
   return RefreshFocusedContext();
 }
 
@@ -328,11 +461,16 @@ STDMETHODIMP TipTextService::OnEndEdit(ITfContext* context,
   return S_OK;
 }
 
-STDMETHODIMP TipTextService::OnSetFocus(BOOL) {
+STDMETHODIMP TipTextService::OnSetFocus(BOOL foreground) {
+#if defined(_DEBUG)
+  debug::DebugLog(L"[MilkyWayIME][ITfKeyEventSink::OnSetFocus] foreground=" +
+                  std::to_wstring(foreground ? 1 : 0) + L" process=" +
+                  CurrentProcessName());
+#endif
   return S_OK;
 }
 
-STDMETHODIMP TipTextService::OnTestKeyDown(ITfContext*, WPARAM wparam,
+STDMETHODIMP TipTextService::OnTestKeyDown(ITfContext* context, WPARAM wparam,
                                            LPARAM lparam, BOOL* eaten) {
   if (eaten == nullptr) {
     return E_INVALIDARG;
@@ -344,6 +482,12 @@ STDMETHODIMP TipTextService::OnTestKeyDown(ITfContext*, WPARAM wparam,
       wparam, lparam, modifiers, engine::key::KeyTransition::kPressed);
 
   if (IsImeModeToggleVirtualKey(wparam)) {
+#if defined(_DEBUG)
+    debug::DebugLog(L"[MilkyWayIME][OnTestKeyDown][VK_HANGUL] context=" +
+                    PointerToString(context) + L" process=" +
+                    CurrentProcessName() + L" ime_open=" +
+                    std::to_wstring(ime_open_ ? 1 : 0));
+#endif
     pending_key_result_.active = true;
     pending_key_result_.event = event;
     pending_key_result_.eaten = true;
@@ -376,11 +520,21 @@ STDMETHODIMP TipTextService::OnKeyDown(ITfContext* context, WPARAM wparam,
   *eaten = FALSE;
   const engine::state::ModifierState modifiers = QueryModifierState();
   if (IsImeModeToggleVirtualKey(wparam)) {
+#if defined(_DEBUG)
+    debug::DebugLog(L"[MilkyWayIME][OnKeyDown][VK_HANGUL] context=" +
+                    PointerToString(context) + L" process=" +
+                    CurrentProcessName() + L" ime_open_before=" +
+                    std::to_wstring(ime_open_ ? 1 : 0));
+#endif
     ClearPendingKeyResult();
     logic_.PrepareImeModeToggle();
     if (!FinalizeImeModeToggle(context, L"OnKeyDown(VK_HANGUL)")) {
       SyncCompositionTermination();
     }
+#if defined(_DEBUG)
+    debug::DebugLog(L"[MilkyWayIME][OnKeyDown][VK_HANGUL][Done] ime_open_after=" +
+                    std::to_wstring(ime_open_ ? 1 : 0));
+#endif
     *eaten = TRUE;
     return S_OK;
   }
@@ -469,12 +623,42 @@ STDMETHODIMP TipTextService::OnKeyUp(ITfContext*, WPARAM, LPARAM, BOOL* eaten) {
   return S_OK;
 }
 
-STDMETHODIMP TipTextService::OnPreservedKey(ITfContext*, REFGUID, BOOL* eaten) {
+STDMETHODIMP TipTextService::OnPreservedKey(ITfContext* context, REFGUID rguid,
+                                            BOOL* eaten) {
   if (eaten == nullptr) {
     return E_INVALIDARG;
   }
 
   *eaten = FALSE;
+  if (!IsEqualGUID(rguid, kImeModePreservedKeyGuid)) {
+#if defined(_DEBUG)
+    debug::DebugLog(L"[MilkyWayIME][OnPreservedKey][Ignored] guid=" +
+                    GuidToString(rguid) + L" context=" +
+                    PointerToString(context) + L" process=" +
+                    CurrentProcessName());
+#endif
+    return S_OK;
+  }
+
+#if defined(_DEBUG)
+  debug::DebugLog(L"[MilkyWayIME][OnPreservedKey][VK_HANGUL] guid=" +
+                  GuidToString(rguid) + L" context=" +
+                  PointerToString(context) + L" fallback_context=" +
+                  PointerToString(text_edit_sink_context_) + L" process=" +
+                  CurrentProcessName() + L" ime_open_before=" +
+                  std::to_wstring(ime_open_ ? 1 : 0));
+#endif
+  logic_.PrepareImeModeToggle();
+  ITfContext* toggle_context =
+      context != nullptr ? context : text_edit_sink_context_;
+  if (!FinalizeImeModeToggle(toggle_context, L"OnPreservedKey(VK_HANGUL)")) {
+    SyncCompositionTermination();
+  }
+#if defined(_DEBUG)
+  debug::DebugLog(L"[MilkyWayIME][OnPreservedKey][VK_HANGUL][Done] ime_open_after=" +
+                  std::to_wstring(ime_open_ ? 1 : 0));
+#endif
+  *eaten = TRUE;
   return S_OK;
 }
 
@@ -489,6 +673,55 @@ STDMETHODIMP TipTextService::OnCompositionTerminated(TfEditCookie,
     logic_.OnCompositionTerminated();
   }
 
+  return S_OK;
+}
+
+STDMETHODIMP TipTextService::OnSetThreadFocus() {
+#if defined(_DEBUG)
+  debug::DebugLog(L"[MilkyWayIME][OnSetThreadFocus] process=" +
+                  CurrentProcessName() + L" thread_mgr=" +
+                  PointerToString(thread_mgr_) + L" text_context=" +
+                  PointerToString(text_edit_sink_context_));
+#endif
+
+  const HRESULT hr = RefreshFocusedContext();
+#if defined(_DEBUG)
+  if (FAILED(hr)) {
+    debug::DebugLog(L"[MilkyWayIME][OnSetThreadFocus][RefreshFocusedContextFailed] hr=0x" +
+                    FormatHex(static_cast<std::uint32_t>(hr)));
+  }
+#endif
+  return S_OK;
+}
+
+STDMETHODIMP TipTextService::OnKillThreadFocus() {
+#if defined(_DEBUG)
+  debug::DebugLog(L"[MilkyWayIME][OnKillThreadFocus] process=" +
+                  CurrentProcessName() + L" thread_mgr=" +
+                  PointerToString(thread_mgr_) + L" text_context=" +
+                  PointerToString(text_edit_sink_context_) + L" composing=" +
+                  std::to_wstring(session_.IsComposing() ? 1 : 0));
+#endif
+  return S_OK;
+}
+
+STDMETHODIMP TipTextService::OnChange(REFGUID guid) {
+#if defined(_DEBUG)
+  debug::DebugLog(L"[MilkyWayIME][CompartmentEventSink::OnChange] process=" +
+                  CurrentProcessName() + L" guid=" + GuidToString(guid));
+#endif
+  if (!IsEqualGUID(guid, GUID_COMPARTMENT_KEYBOARD_OPENCLOSE)) {
+    return S_OK;
+  }
+
+  const HRESULT hr =
+      SyncImeOpenFromCompartment(L"CompartmentEventSink::OnChange");
+#if defined(_DEBUG)
+  if (FAILED(hr)) {
+    debug::DebugLog(L"[MilkyWayIME][CompartmentEventSink::OnChange][SyncFailed] hr=0x" +
+                    FormatHex(static_cast<std::uint32_t>(hr)));
+  }
+#endif
   return S_OK;
 }
 
@@ -665,6 +898,46 @@ void TipTextService::UnadviseThreadMgrEventSink() {
   thread_mgr_event_sink_cookie_ = TF_INVALID_COOKIE;
 }
 
+HRESULT TipTextService::AdviseThreadFocusSink() {
+  if (thread_mgr_ == nullptr) {
+    return E_UNEXPECTED;
+  }
+  if (thread_focus_sink_cookie_ != TF_INVALID_COOKIE) {
+    return S_OK;
+  }
+
+  ITfSource* source = nullptr;
+  const HRESULT hr = thread_mgr_->QueryInterface(IID_ITfSource,
+                                                 reinterpret_cast<void**>(&source));
+  if (FAILED(hr)) {
+    return hr;
+  }
+
+  const HRESULT advise_hr = source->AdviseSink(
+      IID_ITfThreadFocusSink, static_cast<ITfThreadFocusSink*>(this),
+      &thread_focus_sink_cookie_);
+  source->Release();
+  if (FAILED(advise_hr)) {
+    thread_focus_sink_cookie_ = TF_INVALID_COOKIE;
+  }
+  return advise_hr;
+}
+
+void TipTextService::UnadviseThreadFocusSink() {
+  if (thread_mgr_ == nullptr || thread_focus_sink_cookie_ == TF_INVALID_COOKIE) {
+    return;
+  }
+
+  ITfSource* source = nullptr;
+  if (SUCCEEDED(thread_mgr_->QueryInterface(IID_ITfSource,
+                                            reinterpret_cast<void**>(&source)))) {
+    source->UnadviseSink(thread_focus_sink_cookie_);
+    source->Release();
+  }
+
+  thread_focus_sink_cookie_ = TF_INVALID_COOKIE;
+}
+
 HRESULT TipTextService::AdviseKeyEventSink() {
   ITfKeystrokeMgr* keystroke_mgr = nullptr;
   const HRESULT hr = thread_mgr_->QueryInterface(
@@ -692,7 +965,141 @@ void TipTextService::UnadviseKeyEventSink() {
   }
 }
 
+HRESULT TipTextService::AdviseKeyboardOpenCloseCompartmentSink() {
+  if (thread_mgr_ == nullptr) {
+    return E_UNEXPECTED;
+  }
+  if (keyboard_openclose_compartment_sink_cookie_ != TF_INVALID_COOKIE) {
+    return S_OK;
+  }
+
+  ITfCompartmentMgr* compartment_manager = nullptr;
+  HRESULT hr = thread_mgr_->GetGlobalCompartment(&compartment_manager);
+  if (FAILED(hr)) {
+    return hr;
+  }
+
+  ITfCompartment* compartment = nullptr;
+  hr = compartment_manager->GetCompartment(
+      GUID_COMPARTMENT_KEYBOARD_OPENCLOSE, &compartment);
+  compartment_manager->Release();
+  if (FAILED(hr)) {
+    return hr;
+  }
+
+  ITfSource* source = nullptr;
+  hr = compartment->QueryInterface(IID_ITfSource,
+                                   reinterpret_cast<void**>(&source));
+  if (FAILED(hr)) {
+    compartment->Release();
+    return hr;
+  }
+
+  const HRESULT advise_hr = source->AdviseSink(
+      IID_ITfCompartmentEventSink,
+      static_cast<ITfCompartmentEventSink*>(this),
+      &keyboard_openclose_compartment_sink_cookie_);
+  source->Release();
+  compartment->Release();
+  if (FAILED(advise_hr)) {
+    keyboard_openclose_compartment_sink_cookie_ = TF_INVALID_COOKIE;
+  }
+  return advise_hr;
+}
+
+void TipTextService::UnadviseKeyboardOpenCloseCompartmentSink() {
+  if (thread_mgr_ == nullptr ||
+      keyboard_openclose_compartment_sink_cookie_ == TF_INVALID_COOKIE) {
+    return;
+  }
+
+  ITfCompartmentMgr* compartment_manager = nullptr;
+  if (SUCCEEDED(thread_mgr_->GetGlobalCompartment(&compartment_manager))) {
+    ITfCompartment* compartment = nullptr;
+    if (SUCCEEDED(compartment_manager->GetCompartment(
+            GUID_COMPARTMENT_KEYBOARD_OPENCLOSE, &compartment))) {
+      ITfSource* source = nullptr;
+      if (SUCCEEDED(compartment->QueryInterface(
+              IID_ITfSource, reinterpret_cast<void**>(&source)))) {
+        source->UnadviseSink(keyboard_openclose_compartment_sink_cookie_);
+        source->Release();
+      }
+      compartment->Release();
+    }
+    compartment_manager->Release();
+  }
+
+  keyboard_openclose_compartment_sink_cookie_ = TF_INVALID_COOKIE;
+}
+
+HRESULT TipTextService::RegisterPreservedKeys() {
+  if (thread_mgr_ == nullptr || client_id_ == TF_CLIENTID_NULL) {
+    return E_UNEXPECTED;
+  }
+  if (preserved_keys_registered_) {
+    return S_OK;
+  }
+
+  ITfKeystrokeMgr* keystroke_mgr = nullptr;
+  const HRESULT hr = thread_mgr_->QueryInterface(
+      IID_ITfKeystrokeMgr, reinterpret_cast<void**>(&keystroke_mgr));
+  if (FAILED(hr)) {
+    return hr;
+  }
+
+  TF_PRESERVEDKEY preserved_key = {};
+  preserved_key.uVKey = VK_HANGUL;
+  preserved_key.uModifiers = 0;
+
+  const HRESULT preserve_hr = keystroke_mgr->PreserveKey(
+      client_id_, kImeModePreservedKeyGuid, &preserved_key,
+      kImeModePreservedKeyDescription,
+      static_cast<ULONG>(std::size(kImeModePreservedKeyDescription) - 1));
+  keystroke_mgr->Release();
+  if (SUCCEEDED(preserve_hr)) {
+    preserved_keys_registered_ = true;
+  }
+
+#if defined(_DEBUG)
+  debug::DebugLog(L"[MilkyWayIME][RegisterPreservedKeys] hr=0x" +
+                  FormatHex(static_cast<std::uint32_t>(preserve_hr)) +
+                  L" client_id=" + std::to_wstring(client_id_) +
+                  L" registered=" +
+                  std::to_wstring(preserved_keys_registered_ ? 1 : 0));
+#endif
+
+  return preserve_hr;
+}
+
+void TipTextService::UnregisterPreservedKeys() {
+  if (thread_mgr_ == nullptr || client_id_ == TF_CLIENTID_NULL ||
+      !preserved_keys_registered_) {
+    return;
+  }
+
+  ITfKeystrokeMgr* keystroke_mgr = nullptr;
+  if (SUCCEEDED(thread_mgr_->QueryInterface(
+          IID_ITfKeystrokeMgr, reinterpret_cast<void**>(&keystroke_mgr)))) {
+    TF_PRESERVEDKEY preserved_key = {};
+    preserved_key.uVKey = VK_HANGUL;
+    preserved_key.uModifiers = 0;
+    keystroke_mgr->UnpreserveKey(kImeModePreservedKeyGuid, &preserved_key);
+    keystroke_mgr->Release();
+  }
+
+  preserved_keys_registered_ = false;
+#if defined(_DEBUG)
+  debug::DebugLog(L"[MilkyWayIME][UnregisterPreservedKeys]");
+#endif
+}
+
 HRESULT TipTextService::RefreshFocusedContext(ITfDocumentMgr* document_mgr) {
+#if defined(_DEBUG)
+  debug::DebugLog(L"[MilkyWayIME][RefreshFocusedContext][Begin] requested_docmgr=" +
+                  PointerToString(document_mgr) + L" thread_mgr=" +
+                  PointerToString(thread_mgr_) + L" process=" +
+                  CurrentProcessName());
+#endif
   ITfDocumentMgr* focused_document_mgr = document_mgr;
   bool release_document_mgr = false;
 
@@ -703,6 +1110,10 @@ HRESULT TipTextService::RefreshFocusedContext(ITfDocumentMgr* document_mgr) {
 
     const HRESULT hr = thread_mgr_->GetFocus(&focused_document_mgr);
     if (FAILED(hr)) {
+#if defined(_DEBUG)
+      debug::DebugLog(L"[MilkyWayIME][RefreshFocusedContext][GetFocusFailed] hr=0x" +
+                      FormatHex(static_cast<std::uint32_t>(hr)));
+#endif
       DetachTextEditSink();
       return hr;
     }
@@ -710,6 +1121,9 @@ HRESULT TipTextService::RefreshFocusedContext(ITfDocumentMgr* document_mgr) {
   }
 
   if (focused_document_mgr == nullptr) {
+#if defined(_DEBUG)
+    debug::DebugLog(L"[MilkyWayIME][RefreshFocusedContext][NoFocusedDocument]");
+#endif
     DetachTextEditSink();
     return S_OK;
   }
@@ -720,22 +1134,40 @@ HRESULT TipTextService::RefreshFocusedContext(ITfDocumentMgr* document_mgr) {
     focused_document_mgr->Release();
   }
   if (FAILED(hr)) {
+#if defined(_DEBUG)
+    debug::DebugLog(L"[MilkyWayIME][RefreshFocusedContext][GetTopFailed] docmgr=" +
+                    PointerToString(focused_document_mgr) + L" hr=0x" +
+                    FormatHex(static_cast<std::uint32_t>(hr)));
+#endif
     DetachTextEditSink();
     return hr;
   }
 
   const HRESULT attach_hr = AttachTextEditSink(context);
+#if defined(_DEBUG)
+  debug::DebugLog(L"[MilkyWayIME][RefreshFocusedContext][End] focused_docmgr=" +
+                  PointerToString(focused_document_mgr) + L" context=" +
+                  PointerToString(context) + L" attach_hr=0x" +
+                  FormatHex(static_cast<std::uint32_t>(attach_hr)));
+#endif
   context->Release();
   return attach_hr;
 }
 
 HRESULT TipTextService::AttachTextEditSink(ITfContext* context) {
   if (context == text_edit_sink_context_) {
+#if defined(_DEBUG)
+    debug::DebugLog(L"[MilkyWayIME][AttachTextEditSink][Reuse] context=" +
+                    PointerToString(context));
+#endif
     return S_OK;
   }
 
   DetachTextEditSink();
   if (context == nullptr) {
+#if defined(_DEBUG)
+    debug::DebugLog(L"[MilkyWayIME][AttachTextEditSink][NullContext]");
+#endif
     return S_OK;
   }
 
@@ -751,15 +1183,27 @@ HRESULT TipTextService::AttachTextEditSink(ITfContext* context) {
       &text_edit_sink_cookie_);
   source->Release();
   if (FAILED(advise_hr)) {
+#if defined(_DEBUG)
+    debug::DebugLog(L"[MilkyWayIME][AttachTextEditSink][AdviseFailed] context=" +
+                    PointerToString(context) + L" hr=0x" +
+                    FormatHex(static_cast<std::uint32_t>(advise_hr)));
+#endif
     return advise_hr;
   }
 
   text_edit_sink_context_ = context;
   text_edit_sink_context_->AddRef();
+#if defined(_DEBUG)
+  debug::DebugLog(L"[MilkyWayIME][AttachTextEditSink][Attached] context=" +
+                  PointerToString(text_edit_sink_context_) + L" cookie=" +
+                  std::to_wstring(text_edit_sink_cookie_));
+#endif
   return S_OK;
 }
 
 void TipTextService::DetachTextEditSink() {
+  ITfContext* previous_context = text_edit_sink_context_;
+  const DWORD previous_cookie = text_edit_sink_cookie_;
   if (text_edit_sink_context_ != nullptr &&
       text_edit_sink_cookie_ != TF_INVALID_COOKIE) {
     ITfSource* source = nullptr;
@@ -772,6 +1216,11 @@ void TipTextService::DetachTextEditSink() {
 
   text_edit_sink_cookie_ = TF_INVALID_COOKIE;
   SafeRelease(text_edit_sink_context_);
+#if defined(_DEBUG)
+  debug::DebugLog(L"[MilkyWayIME][DetachTextEditSink] previous_context=" +
+                  PointerToString(previous_context) + L" previous_cookie=" +
+                  std::to_wstring(previous_cookie));
+#endif
 }
 
 HRESULT TipTextService::AddInputModeLanguageBarItem() {
@@ -903,7 +1352,73 @@ bool TipTextService::SelectionInsideComposition(ITfContext* context,
   return start_compare >= 0 && end_compare <= 0;
 }
 
+HRESULT TipTextService::SyncImeOpenFromCompartment(const wchar_t* origin) {
+  if (thread_mgr_ == nullptr) {
+    return E_UNEXPECTED;
+  }
+
+  ITfCompartmentMgr* compartment_manager = nullptr;
+  HRESULT hr = thread_mgr_->GetGlobalCompartment(&compartment_manager);
+  if (FAILED(hr)) {
+    return hr;
+  }
+
+  ITfCompartment* compartment = nullptr;
+  hr = compartment_manager->GetCompartment(
+      GUID_COMPARTMENT_KEYBOARD_OPENCLOSE, &compartment);
+  compartment_manager->Release();
+  if (FAILED(hr)) {
+    return hr;
+  }
+
+  VARIANT value;
+  VariantInit(&value);
+  hr = compartment->GetValue(&value);
+  compartment->Release();
+  if (FAILED(hr)) {
+    return hr;
+  }
+
+  bool open = ime_open_;
+  bool has_open_value = true;
+  if (value.vt == VT_I4) {
+    open = value.lVal != 0;
+  } else if (value.vt == VT_BOOL) {
+    open = value.boolVal != VARIANT_FALSE;
+  } else {
+    has_open_value = false;
+  }
+
+#if defined(_DEBUG)
+  debug::DebugLog(L"[MilkyWayIME][SyncImeOpenFromCompartment] origin=" +
+                  std::wstring(origin != nullptr ? origin : L"<unknown>") +
+                  L" vt=" + std::to_wstring(value.vt) + L" has_value=" +
+                  std::to_wstring(has_open_value ? 1 : 0) + L" previous=" +
+                  std::to_wstring(ime_open_ ? 1 : 0) + L" next=" +
+                  std::to_wstring(open ? 1 : 0));
+#endif
+
+  VariantClear(&value);
+  if (!has_open_value) {
+    return S_FALSE;
+  }
+
+  ime_open_ = open;
+  if (input_mode_lang_bar_item_ != nullptr) {
+    input_mode_lang_bar_item_->OnImeOpenChanged(open);
+  }
+  return S_OK;
+}
+
 void TipTextService::SetImeOpen(bool open) {
+#if defined(_DEBUG)
+  debug::DebugLog(L"[MilkyWayIME][SetImeOpen][Begin] open=" +
+                  std::to_wstring(open ? 1 : 0) + L" previous=" +
+                  std::to_wstring(ime_open_ ? 1 : 0) + L" process=" +
+                  CurrentProcessName() + L" client_id=" +
+                  std::to_wstring(client_id_) + L" thread_mgr=" +
+                  PointerToString(thread_mgr_));
+#endif
   ime_open_ = open;
 
   if (thread_mgr_ == nullptr || client_id_ == TF_CLIENTID_NULL) {
@@ -915,6 +1430,9 @@ void TipTextService::SetImeOpen(bool open) {
 
   ITfCompartmentMgr* compartment_manager = nullptr;
   if (FAILED(thread_mgr_->GetGlobalCompartment(&compartment_manager))) {
+#if defined(_DEBUG)
+    debug::DebugLog(L"[MilkyWayIME][SetImeOpen][GetGlobalCompartmentFailed]");
+#endif
     if (input_mode_lang_bar_item_ != nullptr) {
       input_mode_lang_bar_item_->OnImeOpenChanged(open);
     }
@@ -928,20 +1446,44 @@ void TipTextService::SetImeOpen(bool open) {
     VariantInit(&value);
     value.vt = VT_I4;
     value.lVal = open ? 1 : 0;
-    compartment->SetValue(client_id_, &value);
+    const HRESULT set_value_hr = compartment->SetValue(client_id_, &value);
+#if defined(_DEBUG)
+    debug::DebugLog(L"[MilkyWayIME][SetImeOpen][SetValue] hr=0x" +
+                    FormatHex(static_cast<std::uint32_t>(set_value_hr)) +
+                    L" compartment=" + PointerToString(compartment));
+#endif
     compartment->Release();
+  } else {
+#if defined(_DEBUG)
+    debug::DebugLog(L"[MilkyWayIME][SetImeOpen][GetCompartmentFailed]");
+#endif
   }
 
   compartment_manager->Release();
   if (input_mode_lang_bar_item_ != nullptr) {
     input_mode_lang_bar_item_->OnImeOpenChanged(open);
   }
+#if defined(_DEBUG)
+  debug::DebugLog(L"[MilkyWayIME][SetImeOpen][End] ime_open=" +
+                  std::to_wstring(ime_open_ ? 1 : 0));
+#endif
 }
 
 bool TipTextService::FinalizeImeModeToggle(ITfContext* context,
                                            const wchar_t* origin) {
+#if defined(_DEBUG)
+  debug::DebugLog(L"[MilkyWayIME][FinalizeImeModeToggle][Begin] origin=" +
+                  std::wstring(origin) + L" context=" +
+                  PointerToString(context) + L" pending_operations=" +
+                  std::to_wstring(edit_sink_.PendingOperationCount()) +
+                  L" ime_open_before=" +
+                  std::to_wstring(ime_open_ ? 1 : 0));
+#endif
   if (edit_sink_.HasPendingOperations()) {
     if (context == nullptr) {
+#if defined(_DEBUG)
+      debug::DebugLog(L"[MilkyWayIME][FinalizeImeModeToggle][NoContext]");
+#endif
       return false;
     }
 
@@ -949,11 +1491,19 @@ bool TipTextService::FinalizeImeModeToggle(ITfContext* context,
         FlushPendingOperations(context, EditSessionRequestPolicy::kKeyPathWrite,
                                origin);
     if (FAILED(hr)) {
+#if defined(_DEBUG)
+      debug::DebugLog(L"[MilkyWayIME][FinalizeImeModeToggle][FlushFailed] hr=0x" +
+                      FormatHex(static_cast<std::uint32_t>(hr)));
+#endif
       return false;
     }
   }
 
   SetImeOpen(!ime_open_);
+#if defined(_DEBUG)
+  debug::DebugLog(L"[MilkyWayIME][FinalizeImeModeToggle][End] ime_open_after=" +
+                  std::to_wstring(ime_open_ ? 1 : 0));
+#endif
   return true;
 }
 

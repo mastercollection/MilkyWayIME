@@ -12,11 +12,15 @@
 namespace milkyway::tsf::registration {
 namespace {
 
-const std::array<GUID, 4> kSupportedCategories = {
+const std::array<GUID, 8> kSupportedCategories = {
     GUID_TFCAT_TIP_KEYBOARD,
+    GUID_TFCAT_DISPLAYATTRIBUTEPROVIDER,
     GUID_TFCAT_TIPCAP_INPUTMODECOMPARTMENT,
+    GUID_TFCAT_TIPCAP_UIELEMENTENABLED,
+    GUID_TFCAT_TIPCAP_SECUREMODE,
     GUID_TFCAT_TIPCAP_IMMERSIVESUPPORT,
     GUID_TFCAT_TIPCAP_SYSTRAYSUPPORT,
+    GUID_TFCAT_TIPCAP_COMLESS,
 };
 constexpr ULONG kTextServiceIconIndex = 0;
 
@@ -43,7 +47,9 @@ HRESULT RegisterServer() {
   HKEY inproc_key = nullptr;
 
   const std::wstring clsid_path = ClsidRegistryPath();
-  LONG status = RegCreateKeyExW(HKEY_CURRENT_USER, clsid_path.c_str(), 0, nullptr,
+  RegDeleteTreeW(HKEY_CURRENT_USER, clsid_path.c_str());
+
+  LONG status = RegCreateKeyExW(HKEY_LOCAL_MACHINE, clsid_path.c_str(), 0, nullptr,
                                 REG_OPTION_NON_VOLATILE, KEY_WRITE, nullptr,
                                 &clsid_key, nullptr);
   if (status != ERROR_SUCCESS) {
@@ -84,6 +90,7 @@ HRESULT RegisterServer() {
 }
 
 void UnregisterServer() {
+  RegDeleteTreeW(HKEY_LOCAL_MACHINE, ClsidRegistryPath().c_str());
   RegDeleteTreeW(HKEY_CURRENT_USER, ClsidRegistryPath().c_str());
 }
 
