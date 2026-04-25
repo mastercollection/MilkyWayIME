@@ -29,8 +29,32 @@ std::wstring CurrentModeText(bool ime_open) {
   return ime_open ? L"가" : L"A";
 }
 
+bool TryReadThemeValue(const wchar_t* value_name, DWORD* value) {
+  constexpr wchar_t kPersonalizeKey[] =
+      L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize";
+  DWORD type = 0;
+  DWORD size = sizeof(*value);
+  return RegGetValueW(HKEY_CURRENT_USER, kPersonalizeKey, value_name,
+                      RRF_RT_REG_DWORD, &type, value, &size) == ERROR_SUCCESS;
+}
+
+bool IsWindowsDarkTheme() {
+  DWORD uses_light_theme = 1;
+  if (TryReadThemeValue(L"SystemUsesLightTheme", &uses_light_theme)) {
+    return uses_light_theme == 0;
+  }
+  if (TryReadThemeValue(L"AppsUseLightTheme", &uses_light_theme)) {
+    return uses_light_theme == 0;
+  }
+  return false;
+}
+
 UINT CurrentModeIconResourceId(bool ime_open) {
-  return ime_open ? IDI_IME_MODE_HANGUL : IDI_IME_MODE_ALPHA;
+  const bool dark_theme = IsWindowsDarkTheme();
+  if (ime_open) {
+    return dark_theme ? IDI_IME_MODE_HANGUL_DARK : IDI_IME_MODE_HANGUL;
+  }
+  return dark_theme ? IDI_IME_MODE_ALPHA_DARK : IDI_IME_MODE_ALPHA;
 }
 
 HICON LoadInputModeIcon(bool ime_open) {

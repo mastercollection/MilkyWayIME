@@ -8,5 +8,7 @@ LANGUAGE 0x09, 0x01
 IDI_MILKYWAYIME ICON "src\\tsf\\resources\\icons\\milkyway_brand.ico"
 IDI_IME_MODE_HANGUL ICON "src\\tsf\\resources\\icons\\milkyway_mode_hangul.ico"
 IDI_IME_MODE_ALPHA ICON "src\\tsf\\resources\\icons\\milkyway_mode_alpha.ico"
+IDI_IME_MODE_HANGUL_DARK ICON "src\\tsf\\resources\\icons\\milkyway_mode_hangul_dark.ico"
+IDI_IME_MODE_ALPHA_DARK ICON "src\\tsf\\resources\\icons\\milkyway_mode_alpha_dark.ico"
 
 #endif
