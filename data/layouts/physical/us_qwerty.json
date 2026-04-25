@@ -1,6 +1,5 @@
 {
   "id": "us_qwerty",
   "displayName": "US QWERTY",
-  "type": "physical",
-  "interpretation": "effectiveBaseLayout"
+  "keys": {}
 }

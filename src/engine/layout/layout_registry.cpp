@@ -1,12 +1,16 @@
 #include "engine/layout/layout_registry.h"
 
-#include "engine/key/base_layout_key.h"
+#include "engine/key/layout_key.h"
 
 namespace milkyway::engine::layout {
 namespace {
 
 const std::vector<PhysicalLayout> kPhysicalLayouts = {
     {"us_qwerty", "US QWERTY",
+     PhysicalLayoutInterpretation::kEffectiveBaseLayout},
+    {"colemak", "Colemak",
+     PhysicalLayoutInterpretation::kEffectiveBaseLayout},
+    {"colemak_dh", "Colemak-DH",
      PhysicalLayoutInterpretation::kEffectiveBaseLayout},
 #if defined(_DEBUG)
     {"test_swapped_rp", "Test Effective Base Layout (Swap R/P)",
@@ -15,58 +19,175 @@ const std::vector<PhysicalLayout> kPhysicalLayouts = {
 };
 
 const std::vector<KoreanLayoutMapping> kKoreanLayouts = {
-    {"ko_dubeolsik", "Korean Dubeolsik", "us_qwerty",
-     KoreanLayoutMappingModel::kRelative},
+    {"ko_dubeolsik", "Korean Dubeolsik"},
 };
 
-key::BaseLayoutKey ResolveUsQwertyBaseLayoutKey(std::uint16_t virtual_key) {
+key::LayoutKey ResolveUsQwertyLayoutKey(std::uint16_t virtual_key) {
   if (virtual_key >= 'A' && virtual_key <= 'Z') {
-    return static_cast<key::BaseLayoutKey>(
-        static_cast<int>(key::BaseLayoutKey::kA) + (virtual_key - 'A'));
+    return static_cast<key::LayoutKey>(
+        static_cast<int>(key::LayoutKey::kA) + (virtual_key - 'A'));
   }
 
   if (virtual_key >= '0' && virtual_key <= '9') {
-    return static_cast<key::BaseLayoutKey>(
-        static_cast<int>(key::BaseLayoutKey::kDigit0) + (virtual_key - '0'));
+    return static_cast<key::LayoutKey>(
+        static_cast<int>(key::LayoutKey::kDigit0) + (virtual_key - '0'));
   }
 
   switch (virtual_key) {
     case 0x08:
-      return key::BaseLayoutKey::kBackspace;
+      return key::LayoutKey::kBackspace;
     case 0x09:
-      return key::BaseLayoutKey::kTab;
+      return key::LayoutKey::kTab;
     case 0x0D:
-      return key::BaseLayoutKey::kReturn;
+      return key::LayoutKey::kReturn;
     case 0x20:
-      return key::BaseLayoutKey::kSpace;
+      return key::LayoutKey::kSpace;
     case 0xBA:
-      return key::BaseLayoutKey::kOem1;
+      return key::LayoutKey::kOem1;
+    case 0xBB:
+      return key::LayoutKey::kOemPlus;
+    case 0xBC:
+      return key::LayoutKey::kOemComma;
+    case 0xBD:
+      return key::LayoutKey::kOemMinus;
+    case 0xBE:
+      return key::LayoutKey::kOemPeriod;
     case 0xBF:
-      return key::BaseLayoutKey::kOem2;
+      return key::LayoutKey::kOem2;
     case 0xC0:
-      return key::BaseLayoutKey::kOem3;
+      return key::LayoutKey::kOem3;
     case 0xDB:
-      return key::BaseLayoutKey::kOem4;
+      return key::LayoutKey::kOem4;
     case 0xDC:
-      return key::BaseLayoutKey::kOem5;
+      return key::LayoutKey::kOem5;
     case 0xDD:
-      return key::BaseLayoutKey::kOem6;
+      return key::LayoutKey::kOem6;
     case 0xDE:
-      return key::BaseLayoutKey::kOem7;
+      return key::LayoutKey::kOem7;
     default:
-      return key::BaseLayoutKey::kUnknown;
+      return key::LayoutKey::kUnknown;
   }
 }
 
-key::BaseLayoutKey ResolveTestSwappedRpBaseLayoutKey(std::uint16_t virtual_key) {
-  const key::BaseLayoutKey base_key = ResolveUsQwertyBaseLayoutKey(virtual_key);
-  if (base_key == key::BaseLayoutKey::kR) {
-    return key::BaseLayoutKey::kP;
+constexpr key::LayoutKey kTokenKeys[] = {
+    key::LayoutKey::kA,         key::LayoutKey::kB,
+    key::LayoutKey::kC,         key::LayoutKey::kD,
+    key::LayoutKey::kE,         key::LayoutKey::kF,
+    key::LayoutKey::kG,         key::LayoutKey::kH,
+    key::LayoutKey::kI,         key::LayoutKey::kJ,
+    key::LayoutKey::kK,         key::LayoutKey::kL,
+    key::LayoutKey::kM,         key::LayoutKey::kN,
+    key::LayoutKey::kO,         key::LayoutKey::kP,
+    key::LayoutKey::kQ,         key::LayoutKey::kR,
+    key::LayoutKey::kS,         key::LayoutKey::kT,
+    key::LayoutKey::kU,         key::LayoutKey::kV,
+    key::LayoutKey::kW,         key::LayoutKey::kX,
+    key::LayoutKey::kY,         key::LayoutKey::kZ,
+    key::LayoutKey::kDigit0,    key::LayoutKey::kDigit1,
+    key::LayoutKey::kDigit2,    key::LayoutKey::kDigit3,
+    key::LayoutKey::kDigit4,    key::LayoutKey::kDigit5,
+    key::LayoutKey::kDigit6,    key::LayoutKey::kDigit7,
+    key::LayoutKey::kDigit8,    key::LayoutKey::kDigit9,
+    key::LayoutKey::kSpace,     key::LayoutKey::kTab,
+    key::LayoutKey::kReturn,    key::LayoutKey::kBackspace,
+    key::LayoutKey::kOem1,      key::LayoutKey::kOem2,
+    key::LayoutKey::kOem3,      key::LayoutKey::kOem4,
+    key::LayoutKey::kOem5,      key::LayoutKey::kOem6,
+    key::LayoutKey::kOem7,      key::LayoutKey::kOemPlus,
+    key::LayoutKey::kOemComma,  key::LayoutKey::kOemMinus,
+    key::LayoutKey::kOemPeriod,
+};
+
+key::LayoutKey ResolveColemakLabelKey(key::LayoutKey token_key) {
+  switch (token_key) {
+    case key::LayoutKey::kE:
+      return key::LayoutKey::kF;
+    case key::LayoutKey::kR:
+      return key::LayoutKey::kP;
+    case key::LayoutKey::kT:
+      return key::LayoutKey::kG;
+    case key::LayoutKey::kY:
+      return key::LayoutKey::kJ;
+    case key::LayoutKey::kU:
+      return key::LayoutKey::kL;
+    case key::LayoutKey::kI:
+      return key::LayoutKey::kU;
+    case key::LayoutKey::kO:
+      return key::LayoutKey::kY;
+    case key::LayoutKey::kP:
+      return key::LayoutKey::kOem1;
+    case key::LayoutKey::kS:
+      return key::LayoutKey::kR;
+    case key::LayoutKey::kD:
+      return key::LayoutKey::kS;
+    case key::LayoutKey::kF:
+      return key::LayoutKey::kT;
+    case key::LayoutKey::kG:
+      return key::LayoutKey::kD;
+    case key::LayoutKey::kJ:
+      return key::LayoutKey::kN;
+    case key::LayoutKey::kK:
+      return key::LayoutKey::kE;
+    case key::LayoutKey::kL:
+      return key::LayoutKey::kI;
+    case key::LayoutKey::kOem1:
+      return key::LayoutKey::kO;
+    case key::LayoutKey::kN:
+      return key::LayoutKey::kK;
+    default:
+      return token_key;
   }
-  if (base_key == key::BaseLayoutKey::kP) {
-    return key::BaseLayoutKey::kR;
+}
+
+key::LayoutKey ResolveColemakDhLabelKey(key::LayoutKey token_key) {
+  switch (token_key) {
+    case key::LayoutKey::kE:
+      return key::LayoutKey::kF;
+    case key::LayoutKey::kR:
+      return key::LayoutKey::kP;
+    case key::LayoutKey::kT:
+      return key::LayoutKey::kB;
+    case key::LayoutKey::kY:
+      return key::LayoutKey::kJ;
+    case key::LayoutKey::kU:
+      return key::LayoutKey::kL;
+    case key::LayoutKey::kI:
+      return key::LayoutKey::kU;
+    case key::LayoutKey::kO:
+      return key::LayoutKey::kY;
+    case key::LayoutKey::kP:
+      return key::LayoutKey::kOem1;
+    case key::LayoutKey::kS:
+      return key::LayoutKey::kR;
+    case key::LayoutKey::kD:
+      return key::LayoutKey::kS;
+    case key::LayoutKey::kF:
+      return key::LayoutKey::kT;
+    case key::LayoutKey::kH:
+      return key::LayoutKey::kM;
+    case key::LayoutKey::kJ:
+      return key::LayoutKey::kN;
+    case key::LayoutKey::kK:
+      return key::LayoutKey::kE;
+    case key::LayoutKey::kL:
+      return key::LayoutKey::kI;
+    case key::LayoutKey::kOem1:
+      return key::LayoutKey::kO;
+    case key::LayoutKey::kZ:
+      return key::LayoutKey::kX;
+    case key::LayoutKey::kX:
+      return key::LayoutKey::kC;
+    case key::LayoutKey::kC:
+      return key::LayoutKey::kD;
+    case key::LayoutKey::kB:
+      return key::LayoutKey::kZ;
+    case key::LayoutKey::kN:
+      return key::LayoutKey::kK;
+    case key::LayoutKey::kM:
+      return key::LayoutKey::kH;
+    default:
+      return token_key;
   }
-  return base_key;
 }
 
 }  // namespace
@@ -109,31 +230,59 @@ const KoreanLayoutMapping* LayoutRegistry::FindKoreanLayout(
   return nullptr;
 }
 
-key::BaseLayoutKey LayoutRegistry::ResolveBaseLayoutKey(
-    const PhysicalLayoutId& physical_layout_id,
+key::LayoutKey LayoutRegistry::ResolveInputLabelKey(
     const key::PhysicalKey& key) const {
-  if (physical_layout_id == "us_qwerty") {
-    return ResolveUsQwertyBaseLayoutKey(key.virtual_key);
+  return ResolveUsQwertyLayoutKey(key.virtual_key);
+}
+
+key::LayoutKey LayoutRegistry::ResolveBaseLayoutLabelKey(
+    const PhysicalLayoutId& physical_layout_id,
+    key::LayoutKey token_key) const {
+  if (physical_layout_id == "colemak") {
+    return ResolveColemakLabelKey(token_key);
+  }
+
+  if (physical_layout_id == "colemak_dh") {
+    return ResolveColemakDhLabelKey(token_key);
   }
 
 #if defined(_DEBUG)
   if (physical_layout_id == "test_swapped_rp") {
-    return ResolveTestSwappedRpBaseLayoutKey(key.virtual_key);
+    if (token_key == key::LayoutKey::kR) {
+      return key::LayoutKey::kP;
+    }
+    if (token_key == key::LayoutKey::kP) {
+      return key::LayoutKey::kR;
+    }
   }
 #endif
 
-  return key::BaseLayoutKey::kUnknown;
+  return token_key;
+}
+
+key::LayoutKey LayoutRegistry::ResolveHangulTokenKey(
+    const PhysicalLayoutId& physical_layout_id,
+    key::LayoutKey input_label_key) const {
+  for (const key::LayoutKey token_key : kTokenKeys) {
+    if (ResolveBaseLayoutLabelKey(physical_layout_id, token_key) ==
+        input_label_key) {
+      return token_key;
+    }
+  }
+
+  return key::LayoutKey::kUnknown;
 }
 
 key::NormalizedKeyEvent LayoutRegistry::NormalizeKeyEvent(
     const PhysicalLayoutId& physical_layout_id, const key::PhysicalKey& key,
     const state::ModifierState& modifiers,
     key::KeyTransition transition) const {
+  (void)physical_layout_id;
   key::NormalizedKeyEvent event;
   event.key = key;
   event.modifiers = modifiers;
   event.transition = transition;
-  event.base_layout_key = ResolveBaseLayoutKey(physical_layout_id, key);
+  event.input_label_key = ResolveInputLabelKey(key);
   return event;
 }
 
@@ -143,8 +292,8 @@ ResolvedHangulInput LayoutRegistry::ResolveHangulInput(
     return {};
   }
 
-  const char ascii = engine::key::BaseLayoutKeyToAsciiLetter(key.base_layout_key,
-                                                             key.shift);
+  const char ascii = engine::key::LayoutKeyToAsciiLetter(
+      key.hangul_token_key, key.shift);
   if (ascii == 0) {
     return {};
   }

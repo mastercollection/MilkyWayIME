@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "adapters/libhangul/hangul_composer.h"
+#include "engine/key/key_analysis.h"
 #include "engine/key/physical_key.h"
 #include "engine/layout/layout_registry.h"
 #include "engine/session/input_session.h"
@@ -149,8 +150,8 @@ void TestShortcutResolver(
   toggle_query.physical_layout = registry.DefaultPhysicalLayout().id;
   toggle_query.modifiers.ctrl = true;
   toggle_query.modifiers.shift = true;
-  toggle_query.base_layout_key =
-      milkyway::engine::key::BaseLayoutKey::kSpace;
+  toggle_query.input_label_key =
+      milkyway::engine::key::LayoutKey::kSpace;
 
   assert(resolver.Resolve(toggle_query) ==
          milkyway::engine::shortcut::ShortcutAction::kToggleInputMode);
@@ -168,11 +169,11 @@ void TestLayoutRegistryEffectiveBaseLayout(
   const auto event = registry.NormalizeKeyEvent(
       registry.DefaultPhysicalLayout().id, key, {},
       milkyway::engine::key::KeyTransition::kPressed);
-  assert(event.base_layout_key == milkyway::engine::key::BaseLayoutKey::kR);
+  assert(event.input_label_key == milkyway::engine::key::LayoutKey::kR);
 
   const auto shift_input = registry.ResolveHangulInput(
       registry.DefaultKoreanLayout().id,
-      {milkyway::engine::key::BaseLayoutKey::kO, true});
+      {milkyway::engine::key::LayoutKey::kO, true});
   assert(shift_input.is_mapped);
   assert(shift_input.ascii == 'O');
 
@@ -180,14 +181,110 @@ void TestLayoutRegistryEffectiveBaseLayout(
   const milkyway::engine::key::NormalizedKeyEvent swapped_event =
       registry.NormalizeKeyEvent("test_swapped_rp", Key('P'), {},
                                  milkyway::engine::key::KeyTransition::kPressed);
-  assert(swapped_event.base_layout_key ==
-         milkyway::engine::key::BaseLayoutKey::kR);
+  assert(swapped_event.input_label_key ==
+         milkyway::engine::key::LayoutKey::kP);
+  const auto swapped_token =
+      registry.ResolveHangulTokenKey("test_swapped_rp",
+                                     swapped_event.input_label_key);
+  assert(swapped_token == milkyway::engine::key::LayoutKey::kR);
   const auto swapped_input = registry.ResolveHangulInput(
-      registry.DefaultKoreanLayout().id,
-      {swapped_event.base_layout_key, false});
+      registry.DefaultKoreanLayout().id, {swapped_token, false});
   assert(swapped_input.is_mapped);
   assert(swapped_input.ascii == 'r');
 #endif
+}
+
+void TestBuiltInPhysicalLayouts(
+    const milkyway::engine::layout::LayoutRegistry& registry) {
+  using milkyway::engine::key::LayoutKey;
+  using milkyway::engine::key::KeyCategory;
+  using milkyway::engine::key::KeyTransition;
+
+  assert(registry.FindPhysicalLayout("colemak") != nullptr);
+  assert(registry.FindPhysicalLayout("colemak_dh") != nullptr);
+
+  auto input_label_key = [&](const char* layout_id, std::uint16_t virtual_key) {
+    return registry
+        .NormalizeKeyEvent(layout_id, Key(virtual_key), {},
+                           KeyTransition::kPressed)
+        .input_label_key;
+  };
+
+  assert(input_label_key("colemak", 'R') == LayoutKey::kR);
+  assert(input_label_key("colemak_dh", 'R') == LayoutKey::kR);
+
+  assert(registry.ResolveBaseLayoutLabelKey("colemak", LayoutKey::kE) ==
+         LayoutKey::kF);
+  assert(registry.ResolveBaseLayoutLabelKey("colemak", LayoutKey::kR) ==
+         LayoutKey::kP);
+  assert(registry.ResolveBaseLayoutLabelKey("colemak", LayoutKey::kS) ==
+         LayoutKey::kR);
+  assert(registry.ResolveBaseLayoutLabelKey("colemak", LayoutKey::kP) ==
+         LayoutKey::kOem1);
+  assert(registry.ResolveBaseLayoutLabelKey("colemak", LayoutKey::kOem1) ==
+         LayoutKey::kO);
+
+  assert(registry.ResolveBaseLayoutLabelKey("colemak_dh", LayoutKey::kT) ==
+         LayoutKey::kB);
+  assert(registry.ResolveBaseLayoutLabelKey("colemak_dh", LayoutKey::kS) ==
+         LayoutKey::kR);
+  assert(registry.ResolveBaseLayoutLabelKey("colemak_dh", LayoutKey::kH) ==
+         LayoutKey::kM);
+  assert(registry.ResolveBaseLayoutLabelKey("colemak_dh", LayoutKey::kM) ==
+         LayoutKey::kH);
+  assert(registry.ResolveBaseLayoutLabelKey("colemak_dh", LayoutKey::kB) ==
+         LayoutKey::kZ);
+
+  const auto colemak_dh_r = milkyway::engine::key::AnalyzeKeyEvent(
+      registry, "colemak_dh", registry.DefaultKoreanLayout().id, Key('R'), {},
+      KeyTransition::kPressed);
+  assert(colemak_dh_r.input_label_key == LayoutKey::kR);
+  assert(colemak_dh_r.hangul_token_key == LayoutKey::kS);
+  assert(colemak_dh_r.hangul_input.is_mapped);
+  assert(colemak_dh_r.hangul_input.ascii == 's');
+  assert(colemak_dh_r.category == KeyCategory::kHangulAscii);
+
+  const auto colemak_dh_p = milkyway::engine::key::AnalyzeKeyEvent(
+      registry, "colemak_dh", registry.DefaultKoreanLayout().id, Key('P'), {},
+      KeyTransition::kPressed);
+  assert(colemak_dh_p.input_label_key == LayoutKey::kP);
+  assert(colemak_dh_p.hangul_token_key == LayoutKey::kR);
+  assert(colemak_dh_p.hangul_input.is_mapped);
+  assert(colemak_dh_p.hangul_input.ascii == 'r');
+  assert(colemak_dh_p.category == KeyCategory::kHangulAscii);
+
+  const auto colemak_dh_o = milkyway::engine::key::AnalyzeKeyEvent(
+      registry, "colemak_dh", registry.DefaultKoreanLayout().id, Key('O'), {},
+      KeyTransition::kPressed);
+  assert(colemak_dh_o.input_label_key == LayoutKey::kO);
+  assert(colemak_dh_o.hangul_token_key == LayoutKey::kOem1);
+  assert(!colemak_dh_o.hangul_input.is_mapped);
+  assert(colemak_dh_o.category == KeyCategory::kDelimiter);
+
+  milkyway::engine::state::ModifierState ctrl_alt;
+  ctrl_alt.ctrl = true;
+  ctrl_alt.alt = true;
+  const auto colemak_dh_ctrl_o = milkyway::engine::key::AnalyzeKeyEvent(
+      registry, "colemak_dh", registry.DefaultKoreanLayout().id, Key('O'),
+      ctrl_alt, KeyTransition::kPressed);
+  assert(colemak_dh_ctrl_o.shortcut_action ==
+         milkyway::engine::shortcut::ShortcutAction::kOpenConfiguration);
+
+  auto assert_delimiter = [&](std::uint16_t virtual_key,
+                              LayoutKey expected_key) {
+    const auto analysis = milkyway::engine::key::AnalyzeKeyEvent(
+        registry, "us_qwerty", registry.DefaultKoreanLayout().id,
+        Key(virtual_key), {}, KeyTransition::kPressed);
+    assert(analysis.input_label_key == expected_key);
+    assert(analysis.hangul_token_key == expected_key);
+    assert(analysis.category == KeyCategory::kDelimiter);
+  };
+
+  assert_delimiter(0xBA, LayoutKey::kOem1);
+  assert_delimiter(0xBB, LayoutKey::kOemPlus);
+  assert_delimiter(0xBC, LayoutKey::kOemComma);
+  assert_delimiter(0xBD, LayoutKey::kOemMinus);
+  assert_delimiter(0xBE, LayoutKey::kOemPeriod);
 }
 
 void TestTextServiceLifecycle(
@@ -743,7 +840,6 @@ int main() {
 
   assert(registry.DefaultPhysicalLayout().id == "us_qwerty");
   assert(registry.DefaultKoreanLayout().id == "ko_dubeolsik");
-  assert(registry.DefaultKoreanLayout().base_physical_layout == "us_qwerty");
 
   TestInputSession();
   TestLibhangulComposer();
@@ -751,6 +847,7 @@ int main() {
   TestLibhangulComposerShiftFinalSsangSios();
   TestShortcutResolver(registry);
   TestLayoutRegistryEffectiveBaseLayout(registry);
+  TestBuiltInPhysicalLayouts(registry);
   TestTextServiceLifecycle(registry);
   TestTextServiceBackspaceClearsVisibleComposition(registry);
   TestTextServiceAutoReorder(registry);

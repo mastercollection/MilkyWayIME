@@ -2,7 +2,7 @@
 
 #include <string>
 
-#include "engine/key/base_layout_key.h"
+#include "engine/key/layout_key.h"
 
 namespace milkyway::engine::layout {
 
@@ -11,10 +11,6 @@ using KoreanLayoutId = std::string;
 
 enum class PhysicalLayoutInterpretation {
   kEffectiveBaseLayout,
-};
-
-enum class KoreanLayoutMappingModel {
-  kRelative,
 };
 
 struct PhysicalLayout {
@@ -27,12 +23,10 @@ struct PhysicalLayout {
 struct KoreanLayoutMapping {
   KoreanLayoutId id;
   std::string display_name;
-  PhysicalLayoutId base_physical_layout;
-  KoreanLayoutMappingModel mapping_model = KoreanLayoutMappingModel::kRelative;
 };
 
 struct HangulMappingKey {
-  key::BaseLayoutKey base_layout_key = key::BaseLayoutKey::kUnknown;
+  key::LayoutKey hangul_token_key = key::LayoutKey::kUnknown;
   bool shift = false;
 };
 

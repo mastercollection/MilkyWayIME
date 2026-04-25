@@ -12,6 +12,8 @@ Project("{BC8A1FFA-BEE3-4634-8014-F334798102B3}") = "MilkyWayIME.Tests.Tsf", "Mi
 EndProject
 Project("{BC8A1FFA-BEE3-4634-8014-F334798102B3}") = "libhangul", "external\libhangul\libhangul.vcxproj", "{83381EEE-8813-47E6-BDCB-4F9882E81882}"
 EndProject
+Project("{BC8A1FFA-BEE3-4634-8014-F334798102B3}") = "MilkyWayIME.Tools.KeyboardMatrix", "MilkyWayIME.Tools.KeyboardMatrix.vcxproj", "{2433CB53-BA9A-435A-B23A-471B8251748F}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -38,6 +40,10 @@ Global
 		{83381EEE-8813-47E6-BDCB-4F9882E81882}.Debug|x64.Build.0 = Debug|x64
 		{83381EEE-8813-47E6-BDCB-4F9882E81882}.Release|x64.ActiveCfg = Release|x64
 		{83381EEE-8813-47E6-BDCB-4F9882E81882}.Release|x64.Build.0 = Release|x64
+		{2433CB53-BA9A-435A-B23A-471B8251748F}.Debug|x64.ActiveCfg = Debug|x64
+		{2433CB53-BA9A-435A-B23A-471B8251748F}.Debug|x64.Build.0 = Debug|x64
+		{2433CB53-BA9A-435A-B23A-471B8251748F}.Release|x64.ActiveCfg = Release|x64
+		{2433CB53-BA9A-435A-B23A-471B8251748F}.Release|x64.Build.0 = Release|x64
 	EndGlobalSection
 	GlobalSection(ProjectDependencies) = postSolution
 	EndGlobalSection

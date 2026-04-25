@@ -41,6 +41,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="src\adapters\libhangul\libhangul_composer.cpp" />
+    <ClCompile Include="src\engine\key\key_analysis.cpp" />
     <ClCompile Include="src\engine\layout\layout_registry.cpp" />
     <ClCompile Include="src\engine\session\input_session.cpp" />
     <ClCompile Include="src\engine\shortcut\shortcut_resolver.cpp" />
@@ -58,7 +59,8 @@
     <ClInclude Include="src\adapters\libhangul\hangul_composer.h" />
     <ClInclude Include="src\engine\composition\composition_snapshot.h" />
     <ClInclude Include="src\engine\hanja\candidate_request.h" />
-    <ClInclude Include="src\engine\key\base_layout_key.h" />
+    <ClInclude Include="src\engine\key\layout_key.h" />
+    <ClInclude Include="src\engine\key\key_analysis.h" />
     <ClInclude Include="src\engine\key\normalized_key_event.h" />
     <ClInclude Include="src\engine\key\physical_key.h" />
     <ClInclude Include="src\engine\layout\layout_registry.h" />

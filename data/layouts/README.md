@@ -1,11 +1,41 @@
 # Layout Data
 
-Physical English layouts and Korean layout mappings are stored separately.
+Layout data is split by role.
 
-- `physical/`: the effective base English key interpretation layer that Windows/TSF sees
-- `korean/`: Korean mappings defined relative to the selected effective base layout
+- `physical/`: base layouts. A base layout tells the IME which input label is
+  placed on each fixed QWERTY/libhangul token position.
+- `korean/`: built-in Korean layout metadata. For libhangul-supported layouts,
+  composer details are owned by the engine and are not repeated in user data.
 
-Notes:
+## Base Layout Direction
 
-- `physical English layout` does not mean the raw hardware switch matrix. It means the post-remap base layout after firmware remaps such as QMK/ZMK and OS-level remaps such as `Scancode Map`.
-- Korean mappings must be able to distinguish `Shift` as part of a Hangul mapping key. For example, `R` and `Shift+R` may resolve to different Hangul input tokens.
+Base layout `keys` use this direction:
+
+```text
+QWERTY/libhangul token position -> current base layout label
+```
+
+Example:
+
+```json
+{
+  "id": "colemak_dh",
+  "displayName": "Colemak-DH",
+  "keys": {
+    "s": "r"
+  }
+}
+```
+
+This means the fixed QWERTY/libhangul `s` position is labeled `r` in the
+selected base layout. At runtime, the IME builds the inverse map:
+
+```text
+input label r -> QWERTY/libhangul token s -> libhangul input "s" -> ㄴ
+```
+
+Omitted keys are identity mappings. For example, if `"a"` is not listed, `a`
+maps to `a`.
+
+The QWERTY/libhangul token layout is fixed by the engine. User data does not
+declare `type`, `mapsTo`, `inputTokenLayout`, or libhangul keyboard IDs.

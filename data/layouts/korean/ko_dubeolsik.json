@@ -1,18 +1,4 @@
 {
   "id": "ko_dubeolsik",
-  "displayName": "Korean Dubeolsik",
-  "type": "korean",
-  "basePhysicalLayout": "us_qwerty",
-  "mappingModel": "relative",
-  "hangulShiftMode": "mappingKey",
-  "examples": {
-    "R": "ㄱ",
-    "Shift+R": "ㄲ",
-    "T": "ㅅ",
-    "Shift+T": "ㅆ",
-    "O": "ㅐ",
-    "Shift+O": "ㅒ",
-    "P": "ㅔ",
-    "Shift+P": "ㅖ"
-  }
+  "displayName": "Korean Dubeolsik"
 }

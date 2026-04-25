@@ -16,8 +16,10 @@ MilkyWayIME starts from four explicit boundaries:
 - Folder boundaries under `src/` remain the source of truth for subsystem ownership.
 - Layout definitions belong in `data/layouts`, not hardcoded TSF classes.
 - Hanja conversion requests must operate on the current composing syllable only.
-- `physical English layout` means the effective base English layout that Windows/TSF sees after firmware and OS remapping, not a raw switch matrix dump.
-- Hangul mapping keys are resolved from the selected effective base layout, and `Shift` is part of the Hangul mapping key only for Hangul composition.
+- `base layout` means the user's current key-label arrangement as seen through Windows/TSF input labels. It is not a raw hardware switch matrix.
+- TSF key events are normalized first to an `input_label_key`. Shortcuts are resolved from that input label and modifier state.
+- Hangul composition uses the selected base layout's inverse map to convert the input label into the fixed QWERTY/libhangul token before forwarding input to `libhangul`.
+- `Shift` is part of the Hangul token only for Korean composition. It must not leak into shortcut modifier handling.
 
 ## Build Baseline
 

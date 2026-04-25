@@ -162,7 +162,7 @@ bool SameNormalizedKeyEvent(const engine::key::NormalizedKeyEvent& left,
          left.key.scan_code == right.key.scan_code &&
          left.key.extended == right.key.extended &&
          left.transition == right.transition &&
-         left.base_layout_key == right.base_layout_key &&
+         left.input_label_key == right.input_label_key &&
          left.modifiers.ctrl == right.modifiers.ctrl &&
          left.modifiers.alt == right.modifiers.alt &&
          left.modifiers.shift == right.modifiers.shift &&
@@ -583,9 +583,9 @@ STDMETHODIMP TipTextService::OnKeyDown(ITfContext* context, WPARAM wparam,
                            L" ctrl=" + std::to_wstring(modifiers.ctrl ? 1 : 0) +
                            L" alt=" + std::to_wstring(modifiers.alt ? 1 : 0) +
                            L" win=" + std::to_wstring(modifiers.win ? 1 : 0) +
-                           L" base=" +
-                           Utf8ToWide(engine::key::BaseLayoutKeyName(
-                               event.base_layout_key)) +
+                            L" input_label=" +
+                            Utf8ToWide(engine::key::LayoutKeyName(
+                                event.input_label_key)) +
                            L" ascii=0x" +
                            std::to_wstring(static_cast<unsigned char>(ascii)) +
                            L" category=" + CategoryName(result.category) +

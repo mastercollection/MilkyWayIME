@@ -1,10 +1,10 @@
 #pragma once
 
 #include <memory>
-#include <optional>
 #include <string>
 
 #include "adapters/libhangul/hangul_composer.h"
+#include "engine/key/key_analysis.h"
 #include "engine/key/physical_key.h"
 #include "engine/key/normalized_key_event.h"
 #include "engine/layout/layout_registry.h"
@@ -57,18 +57,15 @@ class TextService {
 #endif
 
  private:
-  engine::key::NormalizedKeyEvent NormalizeKeyEvent(
+  engine::key::KeyAnalysis AnalyzeKeyEvent(
       const engine::key::PhysicalKey& key,
       const engine::state::ModifierState& modifiers,
       engine::key::KeyTransition transition) const;
-  std::optional<char> ResolveHangulAscii(
-      const engine::key::NormalizedKeyEvent& event) const;
-  KeyEventCategory ClassifyKey(const engine::key::NormalizedKeyEvent& event) const;
-  KeyEventResult HandleHangulAscii(const engine::key::NormalizedKeyEvent& event);
+  KeyEventResult HandleHangulAscii(const engine::key::KeyAnalysis& analysis);
   KeyEventResult HandleBackspace();
   KeyEventResult HandleDelimiterOrUnhandled(KeyEventCategory category);
   KeyEventResult HandleModifiedShortcut(
-      const engine::key::NormalizedKeyEvent& event);
+      const engine::key::KeyAnalysis& analysis);
   bool EndActiveComposition(engine::session::CompositionEndReason reason);
   void ResetInternalState(engine::session::CompositionEndReason reason);
 
@@ -76,7 +73,6 @@ class TextService {
   std::unique_ptr<adapters::libhangul::HangulComposer> composer_;
   edit::TextEditSink* edit_sink_ = nullptr;
   const engine::layout::LayoutRegistry* layout_registry_ = nullptr;
-  engine::shortcut::ShortcutResolver shortcut_resolver_;
 };
 
 }  // namespace milkyway::tsf::service

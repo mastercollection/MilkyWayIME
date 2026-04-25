@@ -1,6 +1,5 @@
 #include "tsf/service/text_service.h"
 
-#include <cstdint>
 #include <utility>
 
 #include "tsf/edit/composition_edit_session.h"
@@ -8,43 +7,23 @@
 namespace milkyway::tsf::service {
 namespace {
 
-constexpr std::uint16_t kVkBack = 0x08;
-constexpr std::uint16_t kVkTab = 0x09;
-constexpr std::uint16_t kVkReturn = 0x0D;
-constexpr std::uint16_t kVkShift = 0x10;
-constexpr std::uint16_t kVkControl = 0x11;
-constexpr std::uint16_t kVkMenu = 0x12;
-constexpr std::uint16_t kVkSpace = 0x20;
-constexpr std::uint16_t kVkLwin = 0x5B;
-constexpr std::uint16_t kVkRwin = 0x5C;
-constexpr std::uint16_t kVkNumpad0 = 0x60;
-constexpr std::uint16_t kVkDivide = 0x6F;
-constexpr std::uint16_t kVkOem1 = 0xBA;
-constexpr std::uint16_t kVkOem3 = 0xC0;
-constexpr std::uint16_t kVkOem4 = 0xDB;
-constexpr std::uint16_t kVkOem7 = 0xDE;
+KeyEventCategory ToServiceCategory(engine::key::KeyCategory category) {
+  switch (category) {
+    case engine::key::KeyCategory::kHangulAscii:
+      return KeyEventCategory::kHangulAscii;
+    case engine::key::KeyCategory::kBackspace:
+      return KeyEventCategory::kBackspace;
+    case engine::key::KeyCategory::kDelimiter:
+      return KeyEventCategory::kDelimiter;
+    case engine::key::KeyCategory::kPureModifier:
+      return KeyEventCategory::kPureModifier;
+    case engine::key::KeyCategory::kModifiedShortcut:
+      return KeyEventCategory::kModifiedShortcut;
+    case engine::key::KeyCategory::kUnhandled:
+      return KeyEventCategory::kUnhandled;
+  }
 
-bool IsAlphabeticVirtualKey(std::uint16_t virtual_key) {
-  return virtual_key >= 'A' && virtual_key <= 'Z';
-}
-
-bool IsAsciiDigitVirtualKey(std::uint16_t virtual_key) {
-  return virtual_key >= '0' && virtual_key <= '9';
-}
-
-bool IsNumpadVirtualKey(std::uint16_t virtual_key) {
-  return virtual_key >= kVkNumpad0 && virtual_key <= kVkDivide;
-}
-
-bool IsOemDelimiterVirtualKey(std::uint16_t virtual_key) {
-  return (virtual_key >= kVkOem1 && virtual_key <= kVkOem3) ||
-         (virtual_key >= kVkOem4 && virtual_key <= kVkOem7);
-}
-
-bool IsPureModifierVirtualKey(std::uint16_t virtual_key) {
-  return virtual_key == kVkShift || virtual_key == kVkControl ||
-         virtual_key == kVkMenu || virtual_key == kVkLwin ||
-         virtual_key == kVkRwin;
+  return KeyEventCategory::kUnhandled;
 }
 
 }  // namespace
@@ -67,10 +46,9 @@ bool TextService::WouldEatKey(
     return false;
   }
 
-  const engine::key::NormalizedKeyEvent event =
-      NormalizeKeyEvent(key, modifiers, transition);
-
-  switch (ClassifyKey(event)) {
+  const engine::key::KeyAnalysis analysis =
+      AnalyzeKeyEvent(key, modifiers, transition);
+  switch (ToServiceCategory(analysis.category)) {
     case KeyEventCategory::kHangulAscii:
       return true;
     case KeyEventCategory::kBackspace:
@@ -80,12 +58,7 @@ bool TextService::WouldEatKey(
     case KeyEventCategory::kUnhandled:
       return false;
     case KeyEventCategory::kModifiedShortcut: {
-      engine::shortcut::ShortcutQuery query;
-      query.physical_layout = session_->physical_layout_id();
-      query.modifiers = modifiers;
-      query.base_layout_key = event.base_layout_key;
-      return shortcut_resolver_.Resolve(query) !=
-             engine::shortcut::ShortcutAction::kNone;
+      return analysis.shortcut_action != engine::shortcut::ShortcutAction::kNone;
     }
   }
 
@@ -100,13 +73,13 @@ KeyEventResult TextService::OnKeyEvent(
     return {};
   }
 
-  const engine::key::NormalizedKeyEvent event =
-      NormalizeKeyEvent(key, modifiers, transition);
-  const KeyEventCategory category = ClassifyKey(event);
+  const engine::key::KeyAnalysis analysis =
+      AnalyzeKeyEvent(key, modifiers, transition);
+  const KeyEventCategory category = ToServiceCategory(analysis.category);
 
   switch (category) {
     case KeyEventCategory::kHangulAscii:
-      return HandleHangulAscii(event);
+      return HandleHangulAscii(analysis);
     case KeyEventCategory::kBackspace:
       return HandleBackspace();
     case KeyEventCategory::kPureModifier: {
@@ -118,7 +91,7 @@ KeyEventResult TextService::OnKeyEvent(
     case KeyEventCategory::kUnhandled:
       return HandleDelimiterOrUnhandled(category);
     case KeyEventCategory::kModifiedShortcut:
-      return HandleModifiedShortcut(event);
+      return HandleModifiedShortcut(analysis);
   }
 
   return {};
@@ -160,81 +133,33 @@ void TextService::OnCompositionTerminated() {
   composer_->Reset();
 }
 
-engine::key::NormalizedKeyEvent TextService::NormalizeKeyEvent(
+engine::key::KeyAnalysis TextService::AnalyzeKeyEvent(
     const engine::key::PhysicalKey& key,
     const engine::state::ModifierState& modifiers,
     engine::key::KeyTransition transition) const {
-  if (layout_registry_ == nullptr) {
-    engine::key::NormalizedKeyEvent event;
-    event.key = key;
-    event.modifiers = modifiers;
-    event.transition = transition;
-    return event;
+  if (layout_registry_ == nullptr || session_ == nullptr) {
+    static const engine::layout::LayoutRegistry fallback_registry;
+    return engine::key::AnalyzeKeyEvent(fallback_registry, {}, {}, key,
+                                        modifiers, transition);
   }
 
-  return layout_registry_->NormalizeKeyEvent(session_->physical_layout_id(), key,
-                                             modifiers, transition);
-}
-
-std::optional<char> TextService::ResolveHangulAscii(
-    const engine::key::NormalizedKeyEvent& event) const {
-  if (layout_registry_ == nullptr) {
-    return std::nullopt;
-  }
-
-  const engine::layout::ResolvedHangulInput input =
-      layout_registry_->ResolveHangulInput(
-          session_->korean_layout_id(),
-          engine::layout::HangulMappingKey{event.base_layout_key,
-                                           event.UsesHangulShift()});
-  if (!input.is_mapped) {
-    return std::nullopt;
-  }
-
-  return input.ascii;
-}
-
-KeyEventCategory TextService::ClassifyKey(
-    const engine::key::NormalizedKeyEvent& event) const {
-  if (IsPureModifierVirtualKey(event.key.virtual_key)) {
-    return KeyEventCategory::kPureModifier;
-  }
-
-  if (event.modifiers.ctrl || event.modifiers.alt || event.modifiers.win) {
-    return KeyEventCategory::kModifiedShortcut;
-  }
-
-  if (event.key.virtual_key == kVkBack) {
-    return KeyEventCategory::kBackspace;
-  }
-
-  if (ResolveHangulAscii(event).has_value()) {
-    return KeyEventCategory::kHangulAscii;
-  }
-
-  if (event.key.virtual_key == kVkSpace || event.key.virtual_key == kVkReturn ||
-      event.key.virtual_key == kVkTab ||
-      IsAsciiDigitVirtualKey(event.key.virtual_key) ||
-      IsNumpadVirtualKey(event.key.virtual_key) ||
-      IsOemDelimiterVirtualKey(event.key.virtual_key)) {
-    return KeyEventCategory::kDelimiter;
-  }
-
-  return KeyEventCategory::kUnhandled;
+  return engine::key::AnalyzeKeyEvent(*layout_registry_,
+                                      session_->physical_layout_id(),
+                                      session_->korean_layout_id(), key,
+                                      modifiers, transition);
 }
 
 KeyEventResult TextService::HandleHangulAscii(
-    const engine::key::NormalizedKeyEvent& event) {
+    const engine::key::KeyAnalysis& analysis) {
   KeyEventResult result;
   result.category = KeyEventCategory::kHangulAscii;
 
-  const std::optional<char> ascii = ResolveHangulAscii(event);
-  if (!ascii.has_value()) {
+  if (!analysis.hangul_input.is_mapped) {
     return HandleDelimiterOrUnhandled(KeyEventCategory::kUnhandled);
   }
 
   const adapters::libhangul::HangulInputResult composer_result =
-      composer_->ProcessAscii(*ascii);
+      composer_->ProcessAscii(analysis.hangul_input.ascii);
   result.commit_text = composer_result.commit_text;
   result.preedit_text = composer_result.preedit_text;
   result.eaten = composer_result.consumed;
@@ -307,16 +232,11 @@ KeyEventResult TextService::HandleDelimiterOrUnhandled(
 }
 
 KeyEventResult TextService::HandleModifiedShortcut(
-    const engine::key::NormalizedKeyEvent& event) {
+    const engine::key::KeyAnalysis& analysis) {
   KeyEventResult result;
   result.category = KeyEventCategory::kModifiedShortcut;
 
-  engine::shortcut::ShortcutQuery query;
-  query.physical_layout = session_->physical_layout_id();
-  query.modifiers = event.modifiers;
-  query.base_layout_key = event.base_layout_key;
-
-  result.shortcut_action = shortcut_resolver_.Resolve(query);
+  result.shortcut_action = analysis.shortcut_action;
   if (result.shortcut_action ==
       engine::shortcut::ShortcutAction::kToggleInputMode) {
     PrepareImeModeToggle();
@@ -351,9 +271,9 @@ void TextService::ResetInternalState(
 #if defined(_DEBUG)
 char TextService::DebugToAscii(const engine::key::PhysicalKey& key,
                                const engine::state::ModifierState& modifiers) const {
-  const std::optional<char> ascii = ResolveHangulAscii(
-      NormalizeKeyEvent(key, modifiers, engine::key::KeyTransition::kPressed));
-  return ascii.value_or(0);
+  const engine::key::KeyAnalysis analysis =
+      AnalyzeKeyEvent(key, modifiers, engine::key::KeyTransition::kPressed);
+  return analysis.hangul_input.is_mapped ? analysis.hangul_input.ascii : 0;
 }
 #endif
 

@@ -4,8 +4,9 @@ MilkyWayIME is a Korean TSF IME project for Windows.
 
 ## Goals
 
-- Separate the physical English layout from the Korean layout mapping.
-- Interpret shortcuts consistently from the selected physical English layout.
+- Separate the user's base layout from Korean composition.
+- Convert input labels through the selected base layout to fixed QWERTY/libhangul tokens for Korean composition.
+- Interpret shortcuts from the input labels reported by Windows/TSF.
 - Support Hanja candidate selection from the current composing Korean syllable.
 - Keep the project extensible for future custom layouts.
 
@@ -33,6 +34,23 @@ This repository currently contains an early but manually testable TSF path:
 - `src/adapters/libhangul` for the statically linked `libhangul` integration boundary
 - `data/layouts` for data-driven layout definitions
 - `tests` for unit, layout, and integration test structure
+
+## Layout Model
+
+Base layout data describes the user's current key-label arrangement. Its mapping
+direction is `QWERTY/libhangul token position -> current base layout label`.
+Omitted keys are identity mappings.
+
+During Korean composition, MilkyWayIME inverts the selected base layout:
+
+```text
+input label -> QWERTY/libhangul token -> libhangul
+```
+
+For example, in Colemak-DH the fixed QWERTY `s` position is labeled `r`.
+Therefore input label `R` maps back to libhangul token `s`, producing `ㄴ` in
+two-beolsik. Shortcuts are resolved from the original input label, not from the
+Hangul token.
 
 ## Initial Layout
 

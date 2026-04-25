@@ -1,6 +1,6 @@
 #pragma once
 
-#include "engine/key/base_layout_key.h"
+#include "engine/key/layout_key.h"
 #include "engine/key/physical_key.h"
 #include "engine/state/modifier_state.h"
 
@@ -10,7 +10,7 @@ struct NormalizedKeyEvent {
   PhysicalKey key;
   state::ModifierState modifiers;
   KeyTransition transition = KeyTransition::kPressed;
-  BaseLayoutKey base_layout_key = BaseLayoutKey::kUnknown;
+  LayoutKey input_label_key = LayoutKey::kUnknown;
 
   bool UsesHangulShift() const {
     return modifiers.shift && !modifiers.ctrl && !modifiers.alt && !modifiers.win;

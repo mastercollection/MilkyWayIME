@@ -21,9 +21,13 @@ class LayoutRegistry {
   const PhysicalLayout* FindPhysicalLayout(
       const PhysicalLayoutId& id) const;
   const KoreanLayoutMapping* FindKoreanLayout(const KoreanLayoutId& id) const;
-  key::BaseLayoutKey ResolveBaseLayoutKey(
+  key::LayoutKey ResolveInputLabelKey(const key::PhysicalKey& key) const;
+  key::LayoutKey ResolveBaseLayoutLabelKey(
       const PhysicalLayoutId& physical_layout_id,
-      const key::PhysicalKey& key) const;
+      key::LayoutKey token_key) const;
+  key::LayoutKey ResolveHangulTokenKey(
+      const PhysicalLayoutId& physical_layout_id,
+      key::LayoutKey input_label_key) const;
   key::NormalizedKeyEvent NormalizeKeyEvent(
       const PhysicalLayoutId& physical_layout_id,
       const key::PhysicalKey& key,
