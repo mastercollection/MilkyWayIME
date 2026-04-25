@@ -86,11 +86,9 @@ void TestClassFactoryAndInterfaces() {
   TF_DISPLAYATTRIBUTE display_attribute = {};
   hr = display_attribute_info->GetAttributeInfo(&display_attribute);
   assert(SUCCEEDED(hr));
-  assert(display_attribute.crText.type == TF_CT_SYSCOLOR);
-  assert(display_attribute.crText.nIndex == COLOR_WINDOW);
-  assert(display_attribute.crBk.type == TF_CT_SYSCOLOR);
-  assert(display_attribute.crBk.nIndex == COLOR_WINDOWTEXT);
-  assert(display_attribute.lsStyle == TF_LS_NONE);
+  assert(display_attribute.crText.type == TF_CT_NONE);
+  assert(display_attribute.crBk.type == TF_CT_NONE);
+  assert(display_attribute.lsStyle == TF_LS_DOT);
   assert(display_attribute.bAttr == TF_ATTR_INPUT);
 
   display_attribute_info->Release();

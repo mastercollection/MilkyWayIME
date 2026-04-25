@@ -116,8 +116,8 @@ Use the current build only as a developer smoke test target.
    - The language bar or tray input-mode indicator switches between `가` and `A`.
    - The profile icon uses the MilkyWayIME brand icon instead of the plain text fallback.
    - Losing focus commits the current syllable instead of dropping it.
-   - The current composing last syllable is shown with inverted system text and
-     background colors when the target app honors TSF display attributes.
+   - The current composing last syllable is shown with a dotted underline when
+     the target app honors TSF display attributes.
 
 This stage still does not include candidate UI, Hanja selection UI, or an
 installer.

@@ -14,9 +14,9 @@ constexpr wchar_t kComposingLastSyllableDescription[] =
     L"MilkyWayIME composing last syllable";
 
 const TF_DISPLAYATTRIBUTE kComposingLastSyllableDisplayAttribute = {
-    {TF_CT_SYSCOLOR, COLOR_WINDOW},
-    {TF_CT_SYSCOLOR, COLOR_WINDOWTEXT},
-    TF_LS_NONE,
+    {TF_CT_NONE, 0},
+    {TF_CT_NONE, 0},
+    TF_LS_DOT,
     FALSE,
     {TF_CT_NONE, 0},
     TF_ATTR_INPUT,
