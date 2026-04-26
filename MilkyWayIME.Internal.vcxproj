@@ -55,6 +55,7 @@
     <ClCompile Include="src\tsf\service\module_state.cpp" />
     <ClCompile Include="src\tsf\service\text_service.cpp" />
     <ClCompile Include="src\tsf\service\tip_text_service.cpp" />
+    <ClCompile Include="src\tsf\settings\user_layout_paths.cpp" />
     <ClCompile Include="src\tsf\settings\user_settings.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -82,6 +83,7 @@
     <ClInclude Include="src\tsf\service\module_state.h" />
     <ClInclude Include="src\tsf\service\text_service.h" />
     <ClInclude Include="src\tsf\service\tip_text_service.h" />
+    <ClInclude Include="src\tsf\settings\user_layout_paths.h" />
     <ClInclude Include="src\tsf\settings\user_settings.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

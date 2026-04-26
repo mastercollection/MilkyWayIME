@@ -5,6 +5,7 @@
 #include <strsafe.h>
 
 #include <algorithm>
+#include <filesystem>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -14,6 +15,7 @@
 #include "tsf/debug/debug_log.h"
 #include "tsf/service/module_state.h"
 #include "tsf/service/tip_text_service.h"
+#include "tsf/settings/user_layout_paths.h"
 
 namespace milkyway::tsf::langbar {
 namespace {
@@ -22,6 +24,8 @@ constexpr DWORD kLangBarSinkCookie = 1;
 constexpr UINT kMenuToggleInputMode = 1;
 constexpr UINT kMenuBaseLayoutStart = 1000;
 constexpr UINT kMenuKoreanLayoutStart = 2000;
+constexpr UINT kMenuOpenBaseLayoutFolder = 3001;
+constexpr UINT kMenuOpenKoreanLayoutFolder = 3002;
 // Windows 8+ ignores third-party input mode items unless guidItem matches
 // GUID_LBI_INPUTMODE. Use the documented value directly to avoid SDK/link
 // variance across environments.
@@ -146,6 +150,43 @@ HMENU BuildKoreanLayoutSubmenu(
                        checked_id, MF_BYCOMMAND);
   }
   return menu;
+}
+
+HMENU BuildUserLayoutFolderSubmenu() {
+  HMENU menu = CreatePopupMenu();
+  if (menu == nullptr) {
+    return nullptr;
+  }
+
+  if (!AppendMenuString(menu, kMenuOpenBaseLayoutFolder, 0,
+                        L"키보드 배열 폴더") ||
+      !AppendMenuString(menu, kMenuOpenKoreanLayoutFolder, 0,
+                        L"한글 자판 폴더")) {
+    DestroyMenu(menu);
+    return nullptr;
+  }
+
+  return menu;
+}
+
+bool OpenUserLayoutFolder(const std::filesystem::path& directory) {
+  if (!settings::EnsureDirectoryExists(directory)) {
+#if defined(_DEBUG)
+    debug::DebugLog(L"[MilkyWayIME][LangBar][OpenUserLayoutFolder][CreateFailed] dir=" +
+                    directory.wstring());
+#endif
+    return false;
+  }
+
+  if (!settings::OpenDirectoryInExplorer(directory)) {
+#if defined(_DEBUG)
+    debug::DebugLog(L"[MilkyWayIME][LangBar][OpenUserLayoutFolder][OpenFailed] dir=" +
+                    directory.wstring());
+#endif
+    return false;
+  }
+
+  return true;
 }
 
 HWND ResolvePopupOwner() {
@@ -338,6 +379,15 @@ STDMETHODIMP InputModeLangBarItem::OnClick(TfLBIClick click, POINT point,
     DestroyMenu(korean_layout_menu);
   }
 
+  HMENU user_layout_folder_menu = BuildUserLayoutFolderSubmenu();
+  if (user_layout_folder_menu != nullptr) {
+    AppendSeparator(menu);
+    if (!AppendMenuString(menu, reinterpret_cast<UINT_PTR>(user_layout_folder_menu),
+                          MF_POPUP, L"사용자 정의 폴더")) {
+      DestroyMenu(user_layout_folder_menu);
+    }
+  }
+
   HWND owner = ResolvePopupOwner();
   TPMPARAMS params = {};
   TPMPARAMS* popup_params = nullptr;
@@ -405,6 +455,16 @@ STDMETHODIMP InputModeLangBarItem::OnMenuSelect(UINT menu_id) {
     if (index < layouts.size()) {
       host_->SelectKoreanLayoutFromLanguageBar(layouts[index].id);
     }
+    return S_OK;
+  }
+
+  if (menu_id == kMenuOpenBaseLayoutFolder) {
+    OpenUserLayoutFolder(settings::UserBaseLayoutDirectory());
+    return S_OK;
+  }
+
+  if (menu_id == kMenuOpenKoreanLayoutFolder) {
+    OpenUserLayoutFolder(settings::UserKoreanLayoutDirectory());
     return S_OK;
   }
 

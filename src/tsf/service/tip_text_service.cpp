@@ -17,6 +17,7 @@
 #include "tsf/debug/debug_log.h"
 #include "tsf/registration/text_service_registration.h"
 #include "tsf/service/module_state.h"
+#include "tsf/settings/user_layout_paths.h"
 #include "tsf/settings/user_settings.h"
 
 namespace milkyway::tsf::service {
@@ -66,24 +67,6 @@ CreateComposerForKoreanLayout(
 
   return adapters::libhangul::CreateLibhangulComposer(
       layout->libhangul_keyboard_id);
-}
-
-std::filesystem::path UserBaseLayoutDirectory() {
-  const DWORD required = GetEnvironmentVariableW(L"APPDATA", nullptr, 0);
-  if (required == 0) {
-    return {};
-  }
-
-  std::wstring appdata(required, L'\0');
-  const DWORD length =
-      GetEnvironmentVariableW(L"APPDATA", appdata.data(), required);
-  if (length == 0 || length >= required) {
-    return {};
-  }
-
-  appdata.resize(length);
-  return std::filesystem::path(appdata) / L"MilkyWayIME" / L"layouts" /
-         L"base";
 }
 
 #if defined(_DEBUG)
@@ -173,7 +156,8 @@ void LoadUserBaseLayouts(engine::layout::LayoutRegistry* layout_registry) {
     return;
   }
 
-  const std::filesystem::path directory = UserBaseLayoutDirectory();
+  const std::filesystem::path directory =
+      settings::UserBaseLayoutDirectory();
   if (directory.empty()) {
     return;
   }
