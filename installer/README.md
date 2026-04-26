@@ -42,9 +42,10 @@ GitHub Actions uses the same script from
 - manual `workflow_dispatch` input -> that exact version
 - other runs -> `0.1.<GITHUB_RUN_NUMBER>`
 
-The workflow requires a Windows runner with Visual Studio 2026 / MSVC v145. If
-the hosted runner does not provide that toolset, it fails before the build with
-a clear toolset error.
+The workflow runs on GitHub's `windows-2025-vs2026` image and prints the
+installed MSVC toolsets before building. If that runner image stops providing
+Visual Studio 2026 / MSVC v145, it fails before the build with a clear toolset
+error.
 
 The MSI runs `regsvr32` as an elevated deferred custom action:
 

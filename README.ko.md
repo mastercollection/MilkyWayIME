@@ -140,9 +140,10 @@ WiX/MSI ICE validation은 몇 분씩 걸릴 수 있어서 기본값에서는 생
 전체 validation이 필요할 때만 `-ValidateMsi`를 붙입니다.
 
 GitHub Actions workflow는 `.github\workflows\build-installer.yml`에 있습니다.
-같은 Release x64 MSI를 빌드해서 artifact로 업로드합니다. MSI 버전은
-`vX.Y.Z` 태그, 수동 workflow 입력값, 또는 `0.1.<GITHUB_RUN_NUMBER>`에서
-자동으로 정합니다.
+`windows-2025-vs2026` 이미지에서 실행되고, 설치된 MSVC toolset 목록을
+로그에 출력한 뒤 같은 Release x64 MSI를 빌드해서 artifact로 업로드합니다.
+MSI 버전은 `vX.Y.Z` 태그, 수동 workflow 입력값, 또는
+`0.1.<GITHUB_RUN_NUMBER>`에서 자동으로 정합니다.
 
 스크립트는 `Release|x64`를 빌드하고 `mwime_tsf.dll`, 한자 binary cache,
 `us_qwerty` / `colemak` base layout JSON 샘플을 MSI에 포함합니다.

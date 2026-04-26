@@ -170,9 +170,10 @@ Use `-SkipSolutionBuild` for a fast MSI-only rebuild after binaries already
 exist. MSI ICE validation is skipped by default for speed; add `-ValidateMsi`
 when you need full WiX/MSI validation.
 
-The GitHub Actions workflow at `.github\workflows\build-installer.yml` builds
-the same Release x64 MSI and uploads it as an artifact. It derives the MSI
-version from a `vX.Y.Z` tag, an optional manual workflow input, or
+The GitHub Actions workflow at `.github\workflows\build-installer.yml` runs on
+the `windows-2025-vs2026` image, prints the installed MSVC toolsets, builds the
+same Release x64 MSI, and uploads it as an artifact. It derives the MSI version
+from a `vX.Y.Z` tag, an optional manual workflow input, or
 `0.1.<GITHUB_RUN_NUMBER>`.
 
 The script builds `Release|x64`, packages `mwime_tsf.dll`, the binary Hanja

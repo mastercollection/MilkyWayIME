@@ -26,7 +26,7 @@ on:
 jobs:
   build:
     name: Build x64 MSI
-    runs-on: windows-latest
+    runs-on: windows-2025-vs2026
 
     steps:
       - name: Check out repository
@@ -80,6 +80,24 @@ jobs:
             throw "vswhere.exe was not found. This workflow requires Visual Studio 2026 with MSVC v145."
           }
 
+          $installPaths = & $vswhere -all -products * -requires Microsoft.Component.MSBuild -property installationPath
+          if (-not $installPaths) {
+            throw "Visual Studio with MSBuild was not found. This workflow requires Visual Studio 2026 with MSVC v145."
+          }
+
+          "Visual Studio installations:"
+          $installPaths | ForEach-Object { "  $_" }
+
+          foreach ($path in $installPaths) {
+            $msvcRoot = Join-Path $path "VC\Tools\MSVC"
+            if (Test-Path -LiteralPath $msvcRoot) {
+              "MSVC toolsets under $path:"
+              Get-ChildItem $msvcRoot -Directory |
+                Sort-Object Name -Descending |
+                ForEach-Object { "  $($_.Name)  $($_.FullName)" }
+            }
+          }
+
           $installPath = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild -property installationPath
           if (-not $installPath) {
             throw "Visual Studio with MSBuild was not found. This workflow requires Visual Studio 2026 with MSVC v145."
@@ -88,14 +106,16 @@ jobs:
           $msbuild = Join-Path $installPath "MSBuild\Current\Bin\amd64\MSBuild.exe"
           $v145Tools = Get-ChildItem (Join-Path $installPath "VC\Tools\MSVC") -Directory -ErrorAction SilentlyContinue |
             Where-Object { $_.Name -like "14.5*" } |
+            Sort-Object Name -Descending |
             Select-Object -First 1
 
           if (-not (Test-Path -LiteralPath $msbuild) -or -not $v145Tools) {
-            throw "MSVC v145 was not found under '$installPath'. GitHub hosted runners may not have Visual Studio 2026 yet."
+            throw "MSVC v145 was not found under '$installPath'. Use the windows-2025-vs2026 runner image or install Visual Studio 2026 Build Tools."
           }
 
           "Using MSBuild: $msbuild"
           "Using MSVC tools: $($v145Tools.FullName)"
+          & (Join-Path $v145Tools.FullName "bin\Hostx64\x64\cl.exe") /Bv
 
       - name: Build Release x64 MSI
         shell: pwsh
