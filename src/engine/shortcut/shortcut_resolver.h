@@ -8,7 +8,6 @@ namespace milkyway::engine::shortcut {
 
 enum class ShortcutAction {
   kNone,
-  kToggleInputMode,
 };
 
 struct ShortcutQuery {
@@ -26,8 +25,6 @@ constexpr const char* ShortcutActionDebugName(ShortcutAction action) {
   switch (action) {
     case ShortcutAction::kNone:
       return "None";
-    case ShortcutAction::kToggleInputMode:
-      return "ToggleInputMode";
   }
 
   return "Unknown";

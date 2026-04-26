@@ -3,15 +3,7 @@
 namespace milkyway::engine::shortcut {
 
 ShortcutAction ShortcutResolver::Resolve(const ShortcutQuery& query) const {
-  if (query.base_layout_id.empty()) {
-    return ShortcutAction::kNone;
-  }
-
-  if (query.modifiers.ctrl && query.modifiers.shift &&
-      query.input_label_key == key::LayoutKey::kSpace) {
-    return ShortcutAction::kToggleInputMode;
-  }
-
+  (void)query;
   return ShortcutAction::kNone;
 }
 

@@ -605,17 +605,17 @@ void TestLibhangulComposerShinsebeol() {
 void TestShortcutResolver(
     const milkyway::engine::layout::LayoutRegistry& registry) {
   milkyway::engine::shortcut::ShortcutResolver resolver;
-  milkyway::engine::shortcut::ShortcutQuery toggle_query;
-  toggle_query.base_layout_id = registry.DefaultBaseLayout().id;
-  toggle_query.modifiers.ctrl = true;
-  toggle_query.modifiers.shift = true;
-  toggle_query.input_label_key =
+  milkyway::engine::shortcut::ShortcutQuery query;
+  query.base_layout_id = registry.DefaultBaseLayout().id;
+  query.modifiers.ctrl = true;
+  query.modifiers.shift = true;
+  query.input_label_key =
       milkyway::engine::key::LayoutKey::kSpace;
 
-  assert(resolver.Resolve(toggle_query) ==
-         milkyway::engine::shortcut::ShortcutAction::kToggleInputMode);
+  assert(resolver.Resolve(query) ==
+         milkyway::engine::shortcut::ShortcutAction::kNone);
 
-  milkyway::engine::shortcut::ShortcutQuery empty_layout_query = toggle_query;
+  milkyway::engine::shortcut::ShortcutQuery empty_layout_query = query;
   empty_layout_query.base_layout_id.clear();
   assert(resolver.Resolve(empty_layout_query) ==
          milkyway::engine::shortcut::ShortcutAction::kNone);
@@ -1328,24 +1328,22 @@ void TestTextServiceShortcutAndTermination(
     milkyway::engine::state::ModifierState modifiers;
     modifiers.ctrl = true;
     modifiers.shift = true;
-    assert(service.WouldEatKey(Key(kVkSpace), modifiers,
-                               milkyway::engine::key::KeyTransition::kPressed));
+    assert(!service.WouldEatKey(Key(kVkSpace), modifiers,
+                                milkyway::engine::key::KeyTransition::kPressed));
     const auto result =
         service.OnKeyEvent(Key(kVkSpace), modifiers,
                            milkyway::engine::key::KeyTransition::kPressed);
     assert(result.category ==
            milkyway::tsf::service::KeyEventCategory::kModifiedShortcut);
-    assert(result.eaten);
-    assert(!result.should_forward);
+    assert(!result.eaten);
+    assert(result.should_forward);
     assert(result.shortcut_action ==
-           milkyway::engine::shortcut::ShortcutAction::kToggleInputMode);
+           milkyway::engine::shortcut::ShortcutAction::kNone);
     assert(!session.IsComposing());
     assert(session.last_end_reason() ==
-           milkyway::engine::session::CompositionEndReason::kImeModeToggle);
-    assert(sink.operations.size() == 3);
-    AssertOperation(sink.operations[1], TextEditOperationType::kCommitText,
-                    "\xE3\x85\x8E");
-    AssertOperation(sink.operations[2], TextEditOperationType::kEndComposition,
+           milkyway::engine::session::CompositionEndReason::kShortcutBypass);
+    assert(sink.operations.size() == 2);
+    AssertOperation(sink.operations[1], TextEditOperationType::kEndComposition,
                     "");
   }
 

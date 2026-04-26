@@ -357,10 +357,7 @@ KeyEventResult TextService::HandleModifiedShortcut(
   result.category = KeyEventCategory::kModifiedShortcut;
 
   result.shortcut_action = analysis.shortcut_action;
-  if (result.shortcut_action ==
-      engine::shortcut::ShortcutAction::kToggleInputMode) {
-    PrepareImeModeToggle();
-  } else if (session_->IsComposing()) {
+  if (session_->IsComposing()) {
     EndActiveComposition(
         engine::session::CompositionEndReason::kShortcutBypass);
   }

@@ -201,7 +201,6 @@ Use the current build only as a developer smoke test target.
    - Hangul composition starts, updates, and commits.
    - `Backspace`, `Space`, `Enter`, `.`, and `?` end or update composition as expected.
    - `VK_HANGUL` commits the current syllable and toggles IME open/close state.
-   - `Ctrl+Shift+Space` commits the current syllable and toggles IME open/close state.
    - The language bar or tray input-mode indicator switches between `가` and `A`.
    - The language bar menu can switch base and Korean layouts and keeps the selection
      under `HKCU\Software\MilkyWayIME\Settings`.

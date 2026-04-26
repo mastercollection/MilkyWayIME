@@ -711,8 +711,6 @@ const wchar_t* ShortcutActionName(engine::shortcut::ShortcutAction action) {
   switch (action) {
     case engine::shortcut::ShortcutAction::kNone:
       return L"None";
-    case engine::shortcut::ShortcutAction::kToggleInputMode:
-      return L"ToggleInputMode";
   }
 
   return L"Unknown";
@@ -2572,11 +2570,8 @@ void TipTextService::ToggleImeModeFromLanguageBar() {
 
 void TipTextService::HandleShortcutAction(
     ITfContext* context, engine::shortcut::ShortcutAction action) {
-  if (action == engine::shortcut::ShortcutAction::kToggleInputMode) {
-    if (!FinalizeImeModeToggle(context, L"ShortcutToggle")) {
-      SyncCompositionTermination();
-    }
-  }
+  (void)context;
+  (void)action;
 }
 
 bool TipTextService::HandleHanjaKey(ITfContext* context) {
