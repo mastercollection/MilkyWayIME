@@ -1,0 +1,119 @@
+name: Build Windows Installer
+
+on:
+  workflow_dispatch:
+    inputs:
+      productVersion:
+        description: Optional MSI product version. Leave empty to use tag or run number.
+        required: false
+        type: string
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+  pull_request:
+    paths:
+      - ".github/workflows/build-installer.yml"
+      - "Directory.Build.targets"
+      - "MilkyWayIME*.vcxproj"
+      - "MilkyWayIME.sln"
+      - "MilkyWayIME.Common.props"
+      - "installer/**"
+      - "src/**"
+      - "data/**"
+      - "tools/**"
+      - "external/libhangul"
+
+jobs:
+  build:
+    name: Build x64 MSI
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('installer/MilkyWayIME.wixproj') }}
+          restore-keys: |
+            nuget-${{ runner.os }}-
+
+      - name: Resolve product version
+        id: version
+        shell: pwsh
+        run: |
+          $manual = '${{ inputs.productVersion }}'
+          if ($manual) {
+            $version = $manual
+          } elseif ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -match '^v(\d+\.\d+\.\d+)$') {
+            $version = $Matches[1]
+          } else {
+            $version = "0.1.$env:GITHUB_RUN_NUMBER"
+          }
+
+          if ($version -notmatch '^\d{1,3}\.\d{1,3}\.\d{1,5}$') {
+            throw "MSI ProductVersion must be major.minor.build, for example 0.1.123. Got: $version"
+          }
+
+          $parts = $version.Split('.') | ForEach-Object { [int]$_ }
+          if ($parts[0] -gt 255 -or $parts[1] -gt 255 -or $parts[2] -gt 65535) {
+            throw "MSI ProductVersion parts exceed Windows Installer limits: major/minor <= 255, build <= 65535. Got: $version"
+          }
+
+          "productVersion=$version" >> $env:GITHUB_OUTPUT
+          "PRODUCT_VERSION=$version" >> $env:GITHUB_ENV
+
+      - name: Verify Visual Studio 2026 MSVC v145
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          if (-not (Test-Path -LiteralPath $vswhere)) {
+            throw "vswhere.exe was not found. This workflow requires Visual Studio 2026 with MSVC v145."
+          }
+
+          $installPath = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild -property installationPath
+          if (-not $installPath) {
+            throw "Visual Studio with MSBuild was not found. This workflow requires Visual Studio 2026 with MSVC v145."
+          }
+
+          $msbuild = Join-Path $installPath "MSBuild\Current\Bin\amd64\MSBuild.exe"
+          $v145Tools = Get-ChildItem (Join-Path $installPath "VC\Tools\MSVC") -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -like "14.5*" } |
+            Select-Object -First 1
+
+          if (-not (Test-Path -LiteralPath $msbuild) -or -not $v145Tools) {
+            throw "MSVC v145 was not found under '$installPath'. GitHub hosted runners may not have Visual Studio 2026 yet."
+          }
+
+          "Using MSBuild: $msbuild"
+          "Using MSVC tools: $($v145Tools.FullName)"
+
+      - name: Build Release x64 MSI
+        shell: pwsh
+        run: |
+          .\installer\build-installer.ps1 -ProductVersion "${{ steps.version.outputs.productVersion }}"
+
+      - name: Rename MSI with version
+        id: artifact
+        shell: pwsh
+        run: |
+          $source = "build\installer\bin\Release\MilkyWayIME.msi"
+          $target = "build\installer\bin\Release\MilkyWayIME-$env:PRODUCT_VERSION-x64.msi"
+          Copy-Item -LiteralPath $source -Destination $target -Force
+          "path=$target" >> $env:GITHUB_OUTPUT
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MilkyWayIME-${{ steps.version.outputs.productVersion }}-x64-msi
+          path: ${{ steps.artifact.outputs.path }}
+          if-no-files-found: error

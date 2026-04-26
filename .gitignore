@@ -1,5 +1,6 @@
 .vs/
 build/
+installer/obj/
 x64/
 Debug/
 Release/

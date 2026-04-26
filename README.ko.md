@@ -122,6 +122,50 @@ libhangul:my-sebeol
 - 커스텀 한글 자판을 실제 런타임 기능으로 만들려면 libhangul 외부 자판 로딩과 expat 의존성을 빌드에 포함해야 합니다.
 - 신세벌식처럼 한 키가 초성/중성/종성 후보를 함께 가질 수 있는 stateful 자판은 일반 libhangul XML만으로 충분하지 않을 수 있습니다. 그런 경우 libhangul 쪽 자판 타입 확장이나 별도 key value 해석 규칙이 필요합니다.
 
+## 설치 프로그램
+
+첫 설치 프로그램 대상은 x64 WiX v6 MSI입니다.
+
+```powershell
+.\installer\build-installer.ps1
+```
+
+이미 바이너리가 빌드되어 있으면 빠른 MSI 재패키징만 실행할 수 있습니다.
+
+```powershell
+.\installer\build-installer.ps1 -SkipSolutionBuild
+```
+
+WiX/MSI ICE validation은 몇 분씩 걸릴 수 있어서 기본값에서는 생략합니다.
+전체 validation이 필요할 때만 `-ValidateMsi`를 붙입니다.
+
+GitHub Actions workflow는 `.github\workflows\build-installer.yml`에 있습니다.
+같은 Release x64 MSI를 빌드해서 artifact로 업로드합니다. MSI 버전은
+`vX.Y.Z` 태그, 수동 workflow 입력값, 또는 `0.1.<GITHUB_RUN_NUMBER>`에서
+자동으로 정합니다.
+
+스크립트는 `Release|x64`를 빌드하고 `mwime_tsf.dll`, 한자 binary cache,
+`us_qwerty` / `colemak` base layout JSON 샘플을 MSI에 포함합니다.
+
+출력 파일:
+
+```text
+build\installer\bin\Release\MilkyWayIME.msi
+```
+
+MSI는 `%ProgramFiles%\MilkyWayIME`에 설치하고 elevated custom action에서
+`regsvr32`를 실행합니다. 따라서 `DllRegisterServer` /
+`DllUnregisterServer`가 COM 등록과 TSF profile/category 등록을 처리합니다.
+
+현재 한계:
+
+- x64 전용입니다.
+- TSF profile을 등록하지만 현재 사용자에게 `InstallLayoutOrTip`으로 즉시 추가/활성화하지는 않습니다.
+- DIME식 locked DLL rename/copy-back 처리는 아직 없습니다. 업그레이드나 제거 전에는 IME를 사용하는 앱을 닫는 것이 안전합니다.
+
+Release 바이너리는 정적 MSVC 런타임(`/MT`)으로 빌드하므로 MSI가 Visual C++
+Redistributable을 포함하거나 다운로드할 필요는 없습니다.
+
 ## 문서 위치
 
 - 영어/base 자판 샘플: `data/layouts/base`

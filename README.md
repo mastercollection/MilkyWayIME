@@ -158,6 +158,41 @@ Current output paths:
 - `build\MilkyWayIME.Tests.Unit\x64\Debug\mwime_tests.exe`
 - `build\MilkyWayIME.Tests.Tsf\x64\Debug\mwime_tsf_tests.exe`
 
+## Installer
+
+The first installer target is an x64 WiX v6 MSI:
+
+```powershell
+.\installer\build-installer.ps1
+```
+
+Use `-SkipSolutionBuild` for a fast MSI-only rebuild after binaries already
+exist. MSI ICE validation is skipped by default for speed; add `-ValidateMsi`
+when you need full WiX/MSI validation.
+
+The GitHub Actions workflow at `.github\workflows\build-installer.yml` builds
+the same Release x64 MSI and uploads it as an artifact. It derives the MSI
+version from a `vX.Y.Z` tag, an optional manual workflow input, or
+`0.1.<GITHUB_RUN_NUMBER>`.
+
+The script builds `Release|x64`, packages `mwime_tsf.dll`, the binary Hanja
+cache files, and the `us_qwerty` / `colemak` base layout JSON samples, then
+produces:
+
+```text
+build\installer\bin\Release\MilkyWayIME.msi
+```
+
+The MSI installs to `%ProgramFiles%\MilkyWayIME` and runs `regsvr32` as an
+elevated custom action so `DllRegisterServer` / `DllUnregisterServer` handle
+COM and TSF registration. It registers the TSF profile but does not call
+`InstallLayoutOrTip` to enable it for the current user.
+
+Release binaries are built with the static MSVC runtime (`/MT`), so the MSI does
+not need to bundle the Visual C++ Redistributable. Current limitations: x64 only
+and no locked-DLL upgrade/uninstall handling. Close applications using the IME
+before upgrading or uninstalling.
+
 ## Developer Registration
 
 After a `Debug|x64` solution build, register the development DLL with:
@@ -220,9 +255,9 @@ Use the current build only as a developer smoke test target.
    - Candidate colors follow the Windows app light/dark theme and high contrast
      system colors.
 
-This stage still does not include a user-facing installer. Candidate lookup is
-exact dictionary lookup over the selected prefix or caret run segment; morphology,
-particle splitting, and selection-internal searching remain out of scope.
+Candidate lookup is exact dictionary lookup over the selected prefix or caret
+run segment; morphology, particle splitting, and selection-internal searching
+remain out of scope.
 
 ## Test Execution
 

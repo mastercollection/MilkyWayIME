@@ -25,7 +25,7 @@ if /i not "%PLATFORM%"=="x64" if /i not "%PLATFORM%"=="Win32" (
 )
 set "RUNTIME=/MDd"
 set "LINK_OPTIONS=/DEBUG /INCREMENTAL"
-if /i "%CONFIGURATION%"=="Release" set "RUNTIME=/MD"
+if /i "%CONFIGURATION%"=="Release" set "RUNTIME=/MT"
 if /i "%CONFIGURATION%"=="Release" set "LINK_OPTIONS=/OPT:REF /OPT:ICF"
 
 for %%P in (

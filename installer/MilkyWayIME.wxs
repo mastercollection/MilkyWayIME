@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="MilkyWayIME"
+           Manufacturer="MilkyWayIME"
+           Version="$(var.ProductVersion)"
+           UpgradeCode="{DADE2B28-CF23-40A3-A5FD-C6CF09ABCE4A}"
+           Scope="perMachine"
+           InstallerVersion="500"
+           Language="1042"
+           Codepage="65001">
+
+    <SummaryInformation Description="MilkyWayIME installer (x64)"
+                        Manufacturer="MilkyWayIME" />
+    <MajorUpgrade Schedule="afterInstallInitialize"
+                  DowngradeErrorMessage="A newer version of MilkyWayIME is already installed." />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <Property Id="ARPNOMODIFY" Value="1" />
+    <Property Id="ARPPRODUCTICON" Value="MilkyWayIcon" />
+    <Icon Id="MilkyWayIcon"
+          SourceFile="$(var.RepoRoot)src\tsf\resources\icons\milkyway_brand.ico" />
+
+    <SetProperty Id="RegisterMilkyWayIme"
+                 Value="&quot;[System64Folder]regsvr32.exe&quot; /s &quot;[INSTALLFOLDER]mwime_tsf.dll&quot;"
+                 Before="RegisterMilkyWayIme"
+                 Sequence="execute" />
+    <CustomAction Id="RegisterMilkyWayIme"
+                  BinaryRef="Wix4UtilCA_X64"
+                  DllEntry="WixQuietExec64"
+                  Execute="deferred"
+                  Return="check"
+                  Impersonate="no" />
+
+    <SetProperty Id="RollbackRegisterMilkyWayIme"
+                 Value="&quot;[System64Folder]regsvr32.exe&quot; /u /s &quot;[INSTALLFOLDER]mwime_tsf.dll&quot;"
+                 Before="RollbackRegisterMilkyWayIme"
+                 Sequence="execute" />
+    <CustomAction Id="RollbackRegisterMilkyWayIme"
+                  BinaryRef="Wix4UtilCA_X64"
+                  DllEntry="WixQuietExec64"
+                  Execute="rollback"
+                  Return="ignore"
+                  Impersonate="no" />
+
+    <SetProperty Id="UnregisterMilkyWayIme"
+                 Value="&quot;[System64Folder]regsvr32.exe&quot; /u /s &quot;[INSTALLFOLDER]mwime_tsf.dll&quot;"
+                 Before="UnregisterMilkyWayIme"
+                 Sequence="execute" />
+    <CustomAction Id="UnregisterMilkyWayIme"
+                  BinaryRef="Wix4UtilCA_X64"
+                  DllEntry="WixQuietExec64"
+                  Execute="deferred"
+                  Return="ignore"
+                  Impersonate="no" />
+
+    <InstallExecuteSequence>
+      <Custom Action="UnregisterMilkyWayIme" Before="RemoveFiles"
+              Condition='REMOVE="ALL"' />
+      <Custom Action="RollbackRegisterMilkyWayIme" After="InstallFiles"
+              Condition="NOT REMOVE" />
+      <Custom Action="RegisterMilkyWayIme" After="RollbackRegisterMilkyWayIme"
+              Condition="NOT REMOVE" />
+    </InstallExecuteSequence>
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="MilkyWayIME">
+        <Component Id="CmpTsfDll" Guid="*">
+          <File Id="FileTsfDll"
+                Source="$(var.RepoRoot)build\MilkyWayIME.Tsf\$(var.BuildPlatform)\$(var.BuildConfiguration)\mwime_tsf.dll"
+                KeyPath="yes" />
+        </Component>
+
+        <Directory Id="DataFolder" Name="data">
+          <Directory Id="HanjaDataFolder" Name="hanja">
+            <Component Id="CmpHanjaBin" Guid="*">
+              <File Id="FileHanjaBin"
+                    Source="$(var.RepoRoot)external\libhangul\data\hanja\hanja.bin"
+                    KeyPath="yes" />
+            </Component>
+            <Component Id="CmpMsSymbolBin" Guid="*">
+              <File Id="FileMsSymbolBin"
+                    Source="$(var.RepoRoot)external\libhangul\data\hanja\mssymbol.bin"
+                    KeyPath="yes" />
+            </Component>
+          </Directory>
+
+          <Directory Id="LayoutsFolder" Name="layouts">
+            <Directory Id="BaseLayoutsFolder" Name="base">
+              <Component Id="CmpUsQwertyLayoutJson" Guid="*">
+                <File Id="FileUsQwertyLayoutJson"
+                      Source="$(var.RepoRoot)data\layouts\base\us_qwerty.json"
+                      KeyPath="yes" />
+              </Component>
+              <Component Id="CmpColemakLayoutJson" Guid="*">
+                <File Id="FileColemakLayoutJson"
+                      Source="$(var.RepoRoot)data\layouts\base\colemak.json"
+                      KeyPath="yes" />
+              </Component>
+            </Directory>
+          </Directory>
+        </Directory>
+      </Directory>
+    </StandardDirectory>
+
+    <Feature Id="FeatureMain" Title="MilkyWayIME" Level="1">
+      <ComponentRef Id="CmpTsfDll" />
+      <ComponentRef Id="CmpHanjaBin" />
+      <ComponentRef Id="CmpMsSymbolBin" />
+      <ComponentRef Id="CmpUsQwertyLayoutJson" />
+      <ComponentRef Id="CmpColemakLayoutJson" />
+    </Feature>
+  </Package>
+</Wix>

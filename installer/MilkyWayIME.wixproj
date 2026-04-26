@@ -1,0 +1,19 @@
+<Project Sdk="WixToolset.Sdk/6.0.0">
+  <PropertyGroup>
+    <ProductVersion Condition="'$(ProductVersion)' == ''">0.1.0</ProductVersion>
+    <Platform Condition="'$(Platform)' == ''">x64</Platform>
+    <BuildConfiguration Condition="'$(BuildConfiguration)' == ''">Release</BuildConfiguration>
+    <BuildPlatform Condition="'$(BuildPlatform)' == ''">x64</BuildPlatform>
+    <InstallerPlatform>x64</InstallerPlatform>
+    <OutputName>MilkyWayIME</OutputName>
+    <BaseIntermediateOutputPath>..\build\installer\restore-obj\</BaseIntermediateOutputPath>
+    <OutputPath>..\build\installer\bin\$(Configuration)\</OutputPath>
+    <IntermediateOutputPath>..\build\installer\obj\$(Configuration)\</IntermediateOutputPath>
+    <RepoRoot>$(MSBuildThisFileDirectory)..\</RepoRoot>
+    <DefineConstants>RepoRoot=$(RepoRoot);ProductVersion=$(ProductVersion);BuildConfiguration=$(BuildConfiguration);BuildPlatform=$(BuildPlatform)</DefineConstants>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="WixToolset.Util.wixext" Version="6.0.0" />
+  </ItemGroup>
+</Project>
