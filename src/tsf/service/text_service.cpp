@@ -140,6 +140,16 @@ KeyEventResult TextService::OnKeyEvent(
   return {};
 }
 
+bool TextService::ReplaceComposer(
+    std::unique_ptr<adapters::libhangul::HangulComposer> composer) {
+  if (composer == nullptr) {
+    return false;
+  }
+
+  composer_ = std::move(composer);
+  return true;
+}
+
 bool TextService::PrepareImeModeToggle() {
   if (!session_->IsComposing()) {
     return false;

@@ -71,6 +71,46 @@ constexpr char LayoutKeyToAsciiLetter(LayoutKey key, bool shift) {
                             static_cast<int>(LayoutKey::kA)));
 }
 
+constexpr char LayoutKeyToUsQwertyAscii(LayoutKey key, bool shift) {
+  if (IsAlphabeticLayoutKey(key)) {
+    return LayoutKeyToAsciiLetter(key, shift);
+  }
+
+  if (key >= LayoutKey::kDigit0 && key <= LayoutKey::kDigit9) {
+    constexpr char kNormalDigits[] = "0123456789";
+    constexpr char kShiftDigits[] = ")!@#$%^&*(";
+    const int index = static_cast<int>(key) - static_cast<int>(LayoutKey::kDigit0);
+    return shift ? kShiftDigits[index] : kNormalDigits[index];
+  }
+
+  switch (key) {
+    case LayoutKey::kOem1:
+      return shift ? ':' : ';';
+    case LayoutKey::kOemPlus:
+      return shift ? '+' : '=';
+    case LayoutKey::kOemComma:
+      return shift ? '<' : ',';
+    case LayoutKey::kOemMinus:
+      return shift ? '_' : '-';
+    case LayoutKey::kOemPeriod:
+      return shift ? '>' : '.';
+    case LayoutKey::kOem2:
+      return shift ? '?' : '/';
+    case LayoutKey::kOem3:
+      return shift ? '~' : '`';
+    case LayoutKey::kOem4:
+      return shift ? '{' : '[';
+    case LayoutKey::kOem5:
+      return shift ? '|' : '\\';
+    case LayoutKey::kOem6:
+      return shift ? '}' : ']';
+    case LayoutKey::kOem7:
+      return shift ? '"' : '\'';
+    default:
+      return 0;
+  }
+}
+
 constexpr const char* LayoutKeyName(LayoutKey key) {
   switch (key) {
     case LayoutKey::kUnknown:

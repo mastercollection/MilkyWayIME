@@ -47,6 +47,8 @@ class TextService {
   KeyEventResult OnKeyEvent(const engine::key::PhysicalKey& key,
                             const engine::state::ModifierState& modifiers,
                             engine::key::KeyTransition transition);
+  bool ReplaceComposer(
+      std::unique_ptr<adapters::libhangul::HangulComposer> composer);
   bool PrepareImeModeToggle();
   bool PrepareLayoutChange();
   bool OnFocusLost();

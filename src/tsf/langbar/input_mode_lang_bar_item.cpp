@@ -262,7 +262,7 @@ STDMETHODIMP InputModeLangBarItem::GetInfo(TF_LANGBARITEMINFO* info) {
   info->dwStyle = TF_LBI_STYLE_BTN_BUTTON | TF_LBI_STYLE_SHOWNINTRAY;
   info->ulSort = 0;
   StringCchCopyW(info->szDescription, ARRAYSIZE(info->szDescription),
-                 L"MilkyWayIME Input Mode");
+                 L"MilkyWayIME 입력 모드");
   return S_OK;
 }
 
@@ -317,7 +317,7 @@ STDMETHODIMP InputModeLangBarItem::OnClick(TfLBIClick click, POINT point,
   }
 
   AppendMenuString(menu, kMenuToggleInputMode,
-                   ime_open_ ? MF_CHECKED : MF_UNCHECKED, L"Korean Input");
+                   ime_open_ ? MF_CHECKED : MF_UNCHECKED, L"한글 입력");
   AppendSeparator(menu);
 
   HMENU base_layout_menu =
@@ -325,7 +325,7 @@ STDMETHODIMP InputModeLangBarItem::OnClick(TfLBIClick click, POINT point,
                              host_->current_physical_layout_id());
   if (base_layout_menu != nullptr &&
       !AppendMenuString(menu, reinterpret_cast<UINT_PTR>(base_layout_menu),
-                        MF_POPUP, L"Base Layout")) {
+                        MF_POPUP, L"키보드 배열")) {
     DestroyMenu(base_layout_menu);
   }
 
@@ -334,7 +334,7 @@ STDMETHODIMP InputModeLangBarItem::OnClick(TfLBIClick click, POINT point,
                                host_->current_korean_layout_id());
   if (korean_layout_menu != nullptr &&
       !AppendMenuString(menu, reinterpret_cast<UINT_PTR>(korean_layout_menu),
-                        MF_POPUP, L"Korean Layout")) {
+                        MF_POPUP, L"한글 자판")) {
     DestroyMenu(korean_layout_menu);
   }
 

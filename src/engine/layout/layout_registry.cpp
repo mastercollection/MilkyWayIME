@@ -1,21 +1,74 @@
 #include "engine/layout/layout_registry.h"
 
+#include <cstddef>
+#include <iterator>
+
 #include "engine/key/layout_key.h"
 
 namespace milkyway::engine::layout {
 namespace {
 
-const std::vector<PhysicalLayout> kPhysicalLayouts = {
-    {"us_qwerty", "US QWERTY",
-     PhysicalLayoutInterpretation::kEffectiveBaseLayout},
-    {"colemak", "Colemak",
-     PhysicalLayoutInterpretation::kEffectiveBaseLayout},
-    {"colemak_dh", "Colemak-DH",
-     PhysicalLayoutInterpretation::kEffectiveBaseLayout},
+struct LayoutKeyMapping {
+  key::LayoutKey token_key;
+  key::LayoutKey label_key;
 };
 
+struct PhysicalLayoutMapping {
+  PhysicalLayout layout;
+  const LayoutKeyMapping* mappings = nullptr;
+  std::size_t mapping_count = 0;
+};
+
+constexpr LayoutKeyMapping kColemakMappings[] = {
+    {key::LayoutKey::kE, key::LayoutKey::kF},
+    {key::LayoutKey::kR, key::LayoutKey::kP},
+    {key::LayoutKey::kT, key::LayoutKey::kG},
+    {key::LayoutKey::kY, key::LayoutKey::kJ},
+    {key::LayoutKey::kU, key::LayoutKey::kL},
+    {key::LayoutKey::kI, key::LayoutKey::kU},
+    {key::LayoutKey::kO, key::LayoutKey::kY},
+    {key::LayoutKey::kP, key::LayoutKey::kOem1},
+    {key::LayoutKey::kS, key::LayoutKey::kR},
+    {key::LayoutKey::kD, key::LayoutKey::kS},
+    {key::LayoutKey::kF, key::LayoutKey::kT},
+    {key::LayoutKey::kG, key::LayoutKey::kD},
+    {key::LayoutKey::kJ, key::LayoutKey::kN},
+    {key::LayoutKey::kK, key::LayoutKey::kE},
+    {key::LayoutKey::kL, key::LayoutKey::kI},
+    {key::LayoutKey::kOem1, key::LayoutKey::kO},
+    {key::LayoutKey::kN, key::LayoutKey::kK},
+};
+
+const PhysicalLayoutMapping kPhysicalLayoutMappings[] = {
+    {{"us_qwerty", "미국식 쿼티",
+      PhysicalLayoutInterpretation::kEffectiveBaseLayout},
+     nullptr, 0},
+    {{"colemak", "콜맥",
+      PhysicalLayoutInterpretation::kEffectiveBaseLayout},
+     kColemakMappings, std::size(kColemakMappings)},
+};
+
+std::vector<PhysicalLayout> BuildPhysicalLayouts() {
+  std::vector<PhysicalLayout> layouts;
+  layouts.reserve(std::size(kPhysicalLayoutMappings));
+  for (const PhysicalLayoutMapping& mapping : kPhysicalLayoutMappings) {
+    layouts.push_back(mapping.layout);
+  }
+  return layouts;
+}
+
+const std::vector<PhysicalLayout> kPhysicalLayouts = BuildPhysicalLayouts();
+
 const std::vector<KoreanLayoutMapping> kKoreanLayouts = {
-    {"ko_dubeolsik", "Korean Dubeolsik"},
+    {"libhangul:2", "두벌식", "2", false},
+    {"libhangul:2y", "두벌식 옛글", "2y", false},
+    {"libhangul:32", "세벌식 두벌자판", "32", true},
+    {"libhangul:39", "세벌식 390", "39", true},
+    {"libhangul:3f", "세벌식 최종", "3f", true},
+    {"libhangul:3s", "세벌식 순아래", "3s", true},
+    {"libhangul:3y", "세벌식 옛글", "3y", true},
+    {"libhangul:ro", "로마자", "ro", true},
+    {"libhangul:ahn", "안마태", "ahn", true},
 };
 
 key::LayoutKey ResolveUsQwertyLayoutKey(std::uint16_t virtual_key) {
@@ -94,92 +147,14 @@ constexpr key::LayoutKey kTokenKeys[] = {
     key::LayoutKey::kOemPeriod,
 };
 
-key::LayoutKey ResolveColemakLabelKey(key::LayoutKey token_key) {
-  switch (token_key) {
-    case key::LayoutKey::kE:
-      return key::LayoutKey::kF;
-    case key::LayoutKey::kR:
-      return key::LayoutKey::kP;
-    case key::LayoutKey::kT:
-      return key::LayoutKey::kG;
-    case key::LayoutKey::kY:
-      return key::LayoutKey::kJ;
-    case key::LayoutKey::kU:
-      return key::LayoutKey::kL;
-    case key::LayoutKey::kI:
-      return key::LayoutKey::kU;
-    case key::LayoutKey::kO:
-      return key::LayoutKey::kY;
-    case key::LayoutKey::kP:
-      return key::LayoutKey::kOem1;
-    case key::LayoutKey::kS:
-      return key::LayoutKey::kR;
-    case key::LayoutKey::kD:
-      return key::LayoutKey::kS;
-    case key::LayoutKey::kF:
-      return key::LayoutKey::kT;
-    case key::LayoutKey::kG:
-      return key::LayoutKey::kD;
-    case key::LayoutKey::kJ:
-      return key::LayoutKey::kN;
-    case key::LayoutKey::kK:
-      return key::LayoutKey::kE;
-    case key::LayoutKey::kL:
-      return key::LayoutKey::kI;
-    case key::LayoutKey::kOem1:
-      return key::LayoutKey::kO;
-    case key::LayoutKey::kN:
-      return key::LayoutKey::kK;
-    default:
-      return token_key;
+const PhysicalLayoutMapping* FindPhysicalLayoutMapping(
+    const PhysicalLayoutId& physical_layout_id) {
+  for (const PhysicalLayoutMapping& mapping : kPhysicalLayoutMappings) {
+    if (mapping.layout.id == physical_layout_id) {
+      return &mapping;
+    }
   }
-}
-
-key::LayoutKey ResolveColemakDhLabelKey(key::LayoutKey token_key) {
-  switch (token_key) {
-    case key::LayoutKey::kE:
-      return key::LayoutKey::kF;
-    case key::LayoutKey::kR:
-      return key::LayoutKey::kP;
-    case key::LayoutKey::kT:
-      return key::LayoutKey::kB;
-    case key::LayoutKey::kY:
-      return key::LayoutKey::kJ;
-    case key::LayoutKey::kU:
-      return key::LayoutKey::kL;
-    case key::LayoutKey::kI:
-      return key::LayoutKey::kU;
-    case key::LayoutKey::kO:
-      return key::LayoutKey::kY;
-    case key::LayoutKey::kP:
-      return key::LayoutKey::kOem1;
-    case key::LayoutKey::kS:
-      return key::LayoutKey::kR;
-    case key::LayoutKey::kD:
-      return key::LayoutKey::kS;
-    case key::LayoutKey::kF:
-      return key::LayoutKey::kT;
-    case key::LayoutKey::kH:
-      return key::LayoutKey::kM;
-    case key::LayoutKey::kJ:
-      return key::LayoutKey::kN;
-    case key::LayoutKey::kK:
-      return key::LayoutKey::kE;
-    case key::LayoutKey::kL:
-      return key::LayoutKey::kI;
-    case key::LayoutKey::kV:
-      return key::LayoutKey::kD;
-    case key::LayoutKey::kB:
-      return key::LayoutKey::kV;
-    case key::LayoutKey::kOem1:
-      return key::LayoutKey::kO;
-    case key::LayoutKey::kN:
-      return key::LayoutKey::kK;
-    case key::LayoutKey::kM:
-      return key::LayoutKey::kH;
-    default:
-      return token_key;
-  }
+  return nullptr;
 }
 
 }  // namespace
@@ -222,6 +197,16 @@ const KoreanLayoutMapping* LayoutRegistry::FindKoreanLayout(
   return nullptr;
 }
 
+std::string LayoutRegistry::ResolveLibhangulKeyboardId(
+    const KoreanLayoutId& korean_layout_id) const {
+  const KoreanLayoutMapping* layout = FindKoreanLayout(korean_layout_id);
+  if (layout == nullptr) {
+    return DefaultKoreanLayout().libhangul_keyboard_id;
+  }
+
+  return layout->libhangul_keyboard_id;
+}
+
 key::LayoutKey LayoutRegistry::ResolveInputLabelKey(
     const key::PhysicalKey& key) const {
   return ResolveUsQwertyLayoutKey(key.virtual_key);
@@ -230,14 +215,18 @@ key::LayoutKey LayoutRegistry::ResolveInputLabelKey(
 key::LayoutKey LayoutRegistry::ResolveBaseLayoutLabelKey(
     const PhysicalLayoutId& physical_layout_id,
     key::LayoutKey token_key) const {
-  if (physical_layout_id == "colemak") {
-    return ResolveColemakLabelKey(token_key);
+  const PhysicalLayoutMapping* layout_mapping =
+      FindPhysicalLayoutMapping(physical_layout_id);
+  if (layout_mapping == nullptr) {
+    return token_key;
   }
 
-  if (physical_layout_id == "colemak_dh") {
-    return ResolveColemakDhLabelKey(token_key);
+  for (std::size_t index = 0; index < layout_mapping->mapping_count; ++index) {
+    const LayoutKeyMapping& mapping = layout_mapping->mappings[index];
+    if (mapping.token_key == token_key) {
+      return mapping.label_key;
+    }
   }
-
   return token_key;
 }
 
@@ -269,11 +258,17 @@ key::NormalizedKeyEvent LayoutRegistry::NormalizeKeyEvent(
 
 ResolvedHangulInput LayoutRegistry::ResolveHangulInput(
     const KoreanLayoutId& korean_layout_id, const HangulMappingKey& key) const {
-  if (korean_layout_id != "ko_dubeolsik") {
+  const KoreanLayoutMapping* layout = FindKoreanLayout(korean_layout_id);
+  if (layout == nullptr) {
     return {};
   }
 
-  const char ascii = engine::key::LayoutKeyToAsciiLetter(
+  if (!layout->maps_non_letter_ascii &&
+      !engine::key::IsAlphabeticLayoutKey(key.hangul_token_key)) {
+    return {};
+  }
+
+  const char ascii = engine::key::LayoutKeyToUsQwertyAscii(
       key.hangul_token_key, key.shift);
   if (ascii == 0) {
     return {};

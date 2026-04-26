@@ -33,7 +33,7 @@ using milkyway::engine::state::ModifierState;
 struct Options {
   std::string mode;
   std::string physical_layout = "us_qwerty";
-  std::string korean_layout = "ko_dubeolsik";
+  std::string korean_layout = "libhangul:2";
   bool help = false;
 };
 
@@ -171,14 +171,22 @@ std::string EffectiveHangulAscii(const KeyAnalysis& analysis) {
   return std::string(1, analysis.hangul_input.ascii);
 }
 
-std::string PreviewSingleHangul(const KeyAnalysis& analysis) {
+std::unique_ptr<milkyway::adapters::libhangul::HangulComposer> CreateComposer(
+    const LayoutRegistry& registry, const Options& options) {
+  return CreateLibhangulComposer(
+      registry.ResolveLibhangulKeyboardId(options.korean_layout));
+}
+
+std::string PreviewSingleHangul(const LayoutRegistry& registry,
+                                const Options& options,
+                                const KeyAnalysis& analysis) {
   if (analysis.category != KeyCategory::kHangulAscii ||
       !analysis.hangul_input.is_mapped) {
     return "-";
   }
 
   std::unique_ptr<milkyway::adapters::libhangul::HangulComposer> composer =
-      CreateLibhangulComposer();
+      CreateComposer(registry, options);
   if (composer == nullptr) {
     return "<composer-unavailable>";
   }
@@ -210,7 +218,7 @@ void PrintRow(const LayoutRegistry& registry, const Options& options,
             << milkyway::engine::key::LayoutKeyName(
                    analysis.hangul_token_key)
             << '\t' << EffectiveHangulAscii(analysis) << '\t'
-            << PreviewSingleHangul(analysis) << '\t'
+            << PreviewSingleHangul(registry, options, analysis) << '\t'
             << KeyCategoryName(analysis.category) << '\t'
             << ShortcutActionDebugName(analysis.shortcut_action) << '\n';
 }
@@ -221,7 +229,7 @@ std::string PreviewSequence(const LayoutRegistry& registry,
                             std::string* ascii_trace,
                             std::string* category_trace) {
   std::unique_ptr<milkyway::adapters::libhangul::HangulComposer> composer =
-      CreateLibhangulComposer();
+      CreateComposer(registry, options);
   if (composer == nullptr) {
     return "<composer-unavailable>";
   }
@@ -342,6 +350,13 @@ int RunMatrix(const LayoutRegistry& registry, const Options& options) {
     PrintRow(registry, options, KeySpec{key, shift, false});
   }
 
+  for (std::uint16_t key = '0'; key <= '9'; ++key) {
+    PrintRow(registry, options, KeySpec{key, {}, false});
+    ModifierState shift;
+    shift.shift = true;
+    PrintRow(registry, options, KeySpec{key, shift, false});
+  }
+
   const std::vector<std::uint16_t> oem_keys = {
       VK_OEM_1, VK_OEM_PLUS, VK_OEM_COMMA, VK_OEM_MINUS, VK_OEM_PERIOD,
       VK_OEM_2, VK_OEM_3, VK_OEM_4, VK_OEM_5, VK_OEM_6, VK_OEM_7};
@@ -424,7 +439,7 @@ int RunWatch(const LayoutRegistry& registry, const Options& options) {
 
   ConsoleModeGuard console_mode(input);
   std::unique_ptr<milkyway::adapters::libhangul::HangulComposer> composer =
-      CreateLibhangulComposer();
+      CreateComposer(registry, options);
   if (composer == nullptr) {
     std::cerr << "Failed to create libhangul composer.\n";
     return 1;

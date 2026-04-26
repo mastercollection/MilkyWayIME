@@ -14,7 +14,8 @@ MilkyWayIME starts from four explicit boundaries:
 - `adapters/libhangul` is the only place where `libhangul` integration should live.
 - `MilkyWayIME.Internal` is a build-reuse static library, not an architecture boundary.
 - Folder boundaries under `src/` remain the source of truth for subsystem ownership.
-- Layout definitions belong in `data/layouts`, not hardcoded TSF classes.
+- Built-in layout definitions belong in engine-owned data tables, not TSF classes.
+  `data/layouts` remains the schema/sample home for future custom layout files.
 - Hanja conversion requests must operate on the current composing syllable only.
 - `base layout` means the user's current key-label arrangement as seen through Windows/TSF input labels. It is not a raw hardware switch matrix.
 - TSF key events are normalized first to an `input_label_key`. Shortcuts are resolved from that input label and modifier state.

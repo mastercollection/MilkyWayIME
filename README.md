@@ -32,7 +32,7 @@ This repository currently contains an early but manually testable TSF path:
 - `src/tsf` for the initial Windows TSF composition lifecycle layer and the
   minimum COM text service runtime
 - `src/adapters/libhangul` for the statically linked `libhangul` integration boundary
-- `data/layouts` for data-driven layout definitions
+- `data/layouts` for layout schema samples and future custom layout data
 - `tests` for unit, layout, and integration test structure
 
 ## Layout Model
@@ -47,7 +47,7 @@ During Korean composition, MilkyWayIME inverts the selected base layout:
 input label -> QWERTY/libhangul token -> libhangul
 ```
 
-For example, in Colemak-DH the fixed QWERTY `s` position is labeled `r`.
+For example, in Colemak the fixed QWERTY `s` position is labeled `r`.
 Therefore input label `R` maps back to libhangul token `s`, producing `ㄴ` in
 two-beolsik. Shortcuts are resolved from the original input label, not from the
 Hangul token.
@@ -55,9 +55,10 @@ Hangul token.
 ## Settings
 
 MilkyWayIME exposes the current user settings through the language bar menu.
-The first supported setting is the base layout: `us_qwerty`, `colemak`, or
-`colemak_dh`. The selected base layout is stored under
-`HKCU\Software\MilkyWayIME\Settings` and is loaded when the text service starts.
+The supported built-in base layouts are `us_qwerty` and `colemak`. Korean
+layouts use `libhangul:<id>` IDs such as `libhangul:2` and `libhangul:3f`.
+The selected layouts are stored under
+`HKCU\Software\MilkyWayIME\Settings` and loaded when the text service starts.
 
 There is no dedicated settings window yet, and `Ctrl+Alt+O` is intentionally not
 registered as a settings shortcut.
@@ -142,7 +143,7 @@ Use the current build only as a developer smoke test target.
    - `VK_HANGUL` commits the current syllable and toggles IME open/close state.
    - `Ctrl+Shift+Space` commits the current syllable and toggles IME open/close state.
    - The language bar or tray input-mode indicator switches between `가` and `A`.
-   - The language bar menu can switch the base layout and keeps the selection
+   - The language bar menu can switch base and Korean layouts and keeps the selection
      under `HKCU\Software\MilkyWayIME\Settings`.
    - The profile icon uses the MilkyWayIME brand icon instead of the plain text fallback.
    - Losing focus commits the current syllable instead of dropping it.

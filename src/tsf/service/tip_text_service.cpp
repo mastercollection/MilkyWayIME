@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <array>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -47,6 +48,20 @@ std::wstring FormatHex(std::uint32_t value) {
   wchar_t buffer[16] = {};
   swprintf_s(buffer, L"%08X", value);
   return buffer;
+}
+
+std::unique_ptr<adapters::libhangul::HangulComposer>
+CreateComposerForKoreanLayout(
+    const engine::layout::LayoutRegistry& layout_registry,
+    const engine::layout::KoreanLayoutId& korean_layout_id) {
+  const engine::layout::KoreanLayoutMapping* layout =
+      layout_registry.FindKoreanLayout(korean_layout_id);
+  if (layout == nullptr) {
+    return nullptr;
+  }
+
+  return adapters::libhangul::CreateLibhangulComposer(
+      layout->libhangul_keyboard_id);
 }
 
 #if defined(_DEBUG)
@@ -199,8 +214,14 @@ TipTextService::TipTextService()
              &edit_sink_, &layout_registry_) {
   const settings::UserSettings user_settings =
       settings::LoadUserSettings(layout_registry_);
-  session_.SetLayouts(user_settings.physical_layout_id,
-                      user_settings.korean_layout_id);
+  std::unique_ptr<adapters::libhangul::HangulComposer> composer =
+      CreateComposerForKoreanLayout(layout_registry_,
+                                    user_settings.korean_layout_id);
+  if (composer != nullptr) {
+    logic_.ReplaceComposer(std::move(composer));
+    session_.SetLayouts(user_settings.physical_layout_id,
+                        user_settings.korean_layout_id);
+  }
   DllAddRef();
 }
 
@@ -1619,6 +1640,15 @@ void TipTextService::ApplyLayoutSelection(
     return;
   }
 
+  std::unique_ptr<adapters::libhangul::HangulComposer> replacement_composer;
+  if (korean_layout_id != session_.korean_layout_id()) {
+    replacement_composer =
+        CreateComposerForKoreanLayout(layout_registry_, korean_layout_id);
+    if (replacement_composer == nullptr) {
+      return;
+    }
+  }
+
   ClearPendingKeyResult();
   if (logic_.PrepareLayoutChange()) {
     if (text_edit_sink_context_ != nullptr) {
@@ -1637,6 +1667,9 @@ void TipTextService::ApplyLayoutSelection(
   }
 
   session_.SetLayouts(std::move(physical_layout_id), std::move(korean_layout_id));
+  if (replacement_composer != nullptr) {
+    logic_.ReplaceComposer(std::move(replacement_composer));
+  }
   if (!persist_settings) {
     return;
   }

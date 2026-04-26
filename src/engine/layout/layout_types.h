@@ -23,6 +23,8 @@ struct PhysicalLayout {
 struct KoreanLayoutMapping {
   KoreanLayoutId id;
   std::string display_name;
+  std::string libhangul_keyboard_id;
+  bool maps_non_letter_ascii = false;
 };
 
 struct HangulMappingKey {

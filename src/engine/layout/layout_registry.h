@@ -21,6 +21,8 @@ class LayoutRegistry {
   const PhysicalLayout* FindPhysicalLayout(
       const PhysicalLayoutId& id) const;
   const KoreanLayoutMapping* FindKoreanLayout(const KoreanLayoutId& id) const;
+  std::string ResolveLibhangulKeyboardId(
+      const KoreanLayoutId& korean_layout_id) const;
   key::LayoutKey ResolveInputLabelKey(const key::PhysicalKey& key) const;
   key::LayoutKey ResolveBaseLayoutLabelKey(
       const PhysicalLayoutId& physical_layout_id,
