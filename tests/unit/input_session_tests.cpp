@@ -227,6 +227,40 @@ void TestLibhangulComposerShiftFinalSsangSios() {
   assert(composer->GetPreeditText() == "\xEA\xB0\x94");
 }
 
+void TestLibhangulComposerShinsebeol() {
+  {
+    auto composer =
+        milkyway::adapters::libhangul::CreateLibhangulComposer("3sin-1995");
+    assert(composer != nullptr);
+
+    auto step = composer->ProcessAscii('u');
+    assert(step.consumed);
+    assert(step.commit_text.empty());
+    assert(step.preedit_text == "\xE3\x84\xB7");
+
+    step = composer->ProcessAscii('q');
+    assert(step.consumed);
+    assert(step.commit_text.empty());
+    assert(step.preedit_text == "\xEB\x93\xB8");
+  }
+
+  {
+    auto composer =
+        milkyway::adapters::libhangul::CreateLibhangulComposer("3sin-p2");
+    assert(composer != nullptr);
+
+    auto step = composer->ProcessAscii('u');
+    assert(step.consumed);
+    assert(step.commit_text.empty());
+    assert(step.preedit_text == "\xE3\x84\xB7");
+
+    step = composer->ProcessAscii('z');
+    assert(step.consumed);
+    assert(step.commit_text.empty());
+    assert(step.preedit_text == "\xEB\x93\xB8");
+  }
+}
+
 void TestShortcutResolver(
     const milkyway::engine::layout::LayoutRegistry& registry) {
   milkyway::engine::shortcut::ShortcutResolver resolver;
@@ -282,6 +316,8 @@ void TestBuiltInKoreanLayouts(
       {"libhangul:3f", "세벌식 최종", "3f", true},
       {"libhangul:3s", "세벌식 순아래", "3s", true},
       {"libhangul:3y", "세벌식 옛글", "3y", true},
+      {"libhangul:3sin-1995", "신세벌식 1995", "3sin-1995", true},
+      {"libhangul:3sin-p2", "신세벌식 P2", "3sin-p2", true},
       {"libhangul:ro", "로마자", "ro", true},
       {"libhangul:ahn", "안마태", "ahn", true},
   };
@@ -311,6 +347,17 @@ void TestBuiltInKoreanLayouts(
       registry.ResolveHangulInput("libhangul:3f", {LayoutKey::kDigit1, true});
   assert(sebeolsik_shift_digit.is_mapped);
   assert(sebeolsik_shift_digit.ascii == '!');
+
+  const auto shinsebeol_semicolon = registry.ResolveHangulInput(
+      "libhangul:3sin-1995", {LayoutKey::kOem1, false});
+  assert(shinsebeol_semicolon.is_mapped);
+  assert(shinsebeol_semicolon.ascii == ';');
+
+  const auto shinsebeol_p2_slash =
+      registry.ResolveHangulInput("libhangul:3sin-p2",
+                                  {LayoutKey::kOem2, false});
+  assert(shinsebeol_p2_slash.is_mapped);
+  assert(shinsebeol_p2_slash.ascii == '/');
 }
 
 void TestBuiltInBaseLayouts(
@@ -1091,6 +1138,59 @@ void TestTextServiceReplaceComposerForKoreanLayout(
   assert(result.preedit_text == "\xE3\x85\x8F");
   assert(session.IsComposing());
   assert(session.snapshot().preedit == "\xE3\x85\x8F");
+}
+
+void TestTextServiceShinsebeolLayout(
+    const milkyway::engine::layout::LayoutRegistry& registry) {
+  {
+    milkyway::engine::session::InputSession session(
+        registry.DefaultBaseLayout().id, "libhangul:3sin-1995");
+    RecordingEditSink sink;
+    milkyway::tsf::service::TextService service(
+        &session,
+        milkyway::adapters::libhangul::CreateLibhangulComposer("3sin-1995"),
+        &sink, &registry);
+
+    auto result = service.OnKeyEvent(
+        Key('U'), {}, milkyway::engine::key::KeyTransition::kPressed);
+    assert(result.category ==
+           milkyway::tsf::service::KeyEventCategory::kHangulAscii);
+    assert(result.eaten);
+    assert(result.preedit_text == "\xE3\x84\xB7");
+
+    result = service.OnKeyEvent(
+        Key('Q'), {}, milkyway::engine::key::KeyTransition::kPressed);
+    assert(result.category ==
+           milkyway::tsf::service::KeyEventCategory::kHangulAscii);
+    assert(result.eaten);
+    assert(result.preedit_text == "\xEB\x93\xB8");
+    assert(session.snapshot().preedit == "\xEB\x93\xB8");
+  }
+
+  {
+    milkyway::engine::session::InputSession session(
+        registry.DefaultBaseLayout().id, "libhangul:3sin-p2");
+    RecordingEditSink sink;
+    milkyway::tsf::service::TextService service(
+        &session,
+        milkyway::adapters::libhangul::CreateLibhangulComposer("3sin-p2"),
+        &sink, &registry);
+
+    auto result = service.OnKeyEvent(
+        Key('U'), {}, milkyway::engine::key::KeyTransition::kPressed);
+    assert(result.category ==
+           milkyway::tsf::service::KeyEventCategory::kHangulAscii);
+    assert(result.eaten);
+    assert(result.preedit_text == "\xE3\x84\xB7");
+
+    result = service.OnKeyEvent(
+        Key('Z'), {}, milkyway::engine::key::KeyTransition::kPressed);
+    assert(result.category ==
+           milkyway::tsf::service::KeyEventCategory::kHangulAscii);
+    assert(result.eaten);
+    assert(result.preedit_text == "\xEB\x93\xB8");
+    assert(session.snapshot().preedit == "\xEB\x93\xB8");
+  }
 }
 
 void TestTextServiceShiftFinalSsangSios(

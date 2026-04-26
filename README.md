@@ -2,6 +2,8 @@
 
 MilkyWayIME is a Korean TSF IME project for Windows.
 
+한국어 문서는 [README.ko.md](README.ko.md)를 참고하세요.
+
 ## Goals
 
 - Separate the user's base layout from Korean composition.

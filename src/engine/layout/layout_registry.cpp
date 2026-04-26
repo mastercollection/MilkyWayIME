@@ -51,6 +51,8 @@ const std::vector<KoreanLayoutMapping> kKoreanLayouts = {
     {"libhangul:3f", "세벌식 최종", "3f", true},
     {"libhangul:3s", "세벌식 순아래", "3s", true},
     {"libhangul:3y", "세벌식 옛글", "3y", true},
+    {"libhangul:3sin-1995", "신세벌식 1995", "3sin-1995", true},
+    {"libhangul:3sin-p2", "신세벌식 P2", "3sin-p2", true},
     {"libhangul:ro", "로마자", "ro", true},
     {"libhangul:ahn", "안마태", "ahn", true},
 };
