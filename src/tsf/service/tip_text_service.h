@@ -10,8 +10,11 @@
 #include <msctf.h>
 
 #include <atomic>
+#include <optional>
 #include <string>
+#include <vector>
 
+#include "adapters/dictionary/libhangul_hanja_dictionary.h"
 #include "engine/key/normalized_key_event.h"
 #include "adapters/libhangul/hangul_composer.h"
 #include "engine/layout/layout_registry.h"
@@ -20,6 +23,7 @@
 #include "engine/state/modifier_state.h"
 #include "tsf/display/display_attribute.h"
 #include "tsf/edit/tsf_text_edit_sink.h"
+#include "tsf/candidate/candidate_list_ui.h"
 #include "tsf/service/text_service.h"
 
 namespace milkyway::tsf::langbar {
@@ -46,7 +50,8 @@ class TipTextService final : public ITfTextInputProcessorEx,
                              public ITfCompositionSink,
                              public ITfThreadFocusSink,
                              public ITfCompartmentEventSink,
-                             public ITfDisplayAttributeProvider {
+                             public ITfDisplayAttributeProvider,
+                             public candidate::CandidateListOwner {
  public:
   static HRESULT CreateInstance(IUnknown* outer, REFIID riid, void** ppv);
 
@@ -96,6 +101,8 @@ class TipTextService final : public ITfTextInputProcessorEx,
       IEnumTfDisplayAttributeInfo** enum_info) override;
   STDMETHODIMP GetDisplayAttributeInfo(REFGUID guid_info,
                                        ITfDisplayAttributeInfo** info) override;
+  void OnCandidateListFinalize() override;
+  void OnCandidateListAbort() override;
 
   TfClientId client_id() const;
   bool HasActiveComposition() const;
@@ -155,6 +162,13 @@ class TipTextService final : public ITfTextInputProcessorEx,
   void ToggleImeModeFromLanguageBar();
   void HandleShortcutAction(ITfContext* context,
                             engine::shortcut::ShortcutAction action);
+  bool HandleHanjaKey(ITfContext* context);
+  bool OpenCandidateList(
+      ITfContext* context,
+      const std::vector<engine::hanja::Candidate>& candidates);
+  void CloseCandidateList();
+  std::optional<POINT> CandidateWindowAnchor(ITfContext* context) const;
+  std::optional<RECT> CompositionTextRect(ITfContext* context) const;
   HRESULT MoveSelectionToRangeEnd(TfEditCookie edit_cookie, ITfContext* context,
                                   ITfRange* range) const;
   HRESULT ClearCompositionDisplayAttribute(TfEditCookie edit_cookie,
@@ -182,9 +196,11 @@ class TipTextService final : public ITfTextInputProcessorEx,
   TfGuidAtom composing_display_attribute_atom_ = TF_INVALID_GUIDATOM;
   PendingKeyResult pending_key_result_;
   engine::layout::LayoutRegistry layout_registry_;
+  adapters::dictionary::LibhangulHanjaDictionary hanja_dictionary_;
   engine::session::InputSession session_;
   edit::TsfTextEditSink edit_sink_;
   TextService logic_;
+  candidate::CandidateListUi* candidate_list_ = nullptr;
   ::milkyway::tsf::langbar::InputModeLangBarItem* input_mode_lang_bar_item_ =
       nullptr;
 

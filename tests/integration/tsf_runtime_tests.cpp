@@ -8,7 +8,11 @@
 #include <msctf.h>
 
 #include <cassert>
+#include <string>
+#include <utility>
+#include <vector>
 
+#include "tsf/candidate/candidate_list_ui.h"
 #include "tsf/registration/text_service_registration.h"
 #include "tsf/service/module_state.h"
 
@@ -100,10 +104,66 @@ void TestClassFactoryAndInterfaces() {
   assert(milkyway::tsf::service::CanUnloadNow() == S_OK);
 }
 
+void TestCandidateListUiElement() {
+  std::vector<milkyway::tsf::candidate::CandidateUiItem> items = {
+      {"\xE9\x9F\x93", L"\x97D3"},
+      {"\xE6\xBC\xA2", L"\x6F22"},
+      {"\xE5\xAF\x92", L"\x5BD2"},
+  };
+
+  auto* candidate_list = new milkyway::tsf::candidate::CandidateListUi(
+      nullptr, nullptr, nullptr, nullptr, std::move(items));
+  assert(candidate_list != nullptr);
+
+  ITfCandidateListUIElement* ui_element = nullptr;
+  HRESULT hr = candidate_list->QueryInterface(
+      IID_ITfCandidateListUIElement, reinterpret_cast<void**>(&ui_element));
+  assert(SUCCEEDED(hr));
+  assert(ui_element != nullptr);
+
+  UINT count = 0;
+  hr = ui_element->GetCount(&count);
+  assert(SUCCEEDED(hr));
+  assert(count == 3);
+
+  BSTR text = nullptr;
+  hr = ui_element->GetString(0, &text);
+  assert(SUCCEEDED(hr));
+  assert(text != nullptr);
+  assert(std::wstring(text) == L"\x97D3");
+  SysFreeString(text);
+
+  ITfCandidateListUIElementBehavior* behavior = nullptr;
+  hr = candidate_list->QueryInterface(
+      IID_ITfCandidateListUIElementBehavior,
+      reinterpret_cast<void**>(&behavior));
+  assert(SUCCEEDED(hr));
+  assert(behavior != nullptr);
+
+  hr = behavior->SetSelection(1);
+  assert(SUCCEEDED(hr));
+  UINT selection = 0;
+  hr = ui_element->GetSelection(&selection);
+  assert(SUCCEEDED(hr));
+  assert(selection == 1);
+
+  UINT page_count = 0;
+  UINT page_index[2] = {};
+  hr = ui_element->GetPageIndex(page_index, 2, &page_count);
+  assert(SUCCEEDED(hr));
+  assert(page_count == 1);
+  assert(page_index[0] == 0);
+
+  behavior->Release();
+  ui_element->Release();
+  candidate_list->Release();
+}
+
 }  // namespace
 
 int main() {
   TestClassFactoryAndInterfaces();
+  TestCandidateListUiElement();
   return 0;
 }
 

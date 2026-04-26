@@ -1,8 +1,10 @@
 #include <cassert>
+#include <algorithm>
 #include <cstdlib>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <sstream>
 #include <string_view>
 #include <utility>
@@ -12,7 +14,9 @@
 #include <crtdbg.h>
 #endif
 
+#include "adapters/dictionary/libhangul_hanja_dictionary.h"
 #include "adapters/libhangul/hangul_composer.h"
+#include "engine/hanja/candidate_request.h"
 #include "engine/key/key_analysis.h"
 #include "engine/key/physical_key.h"
 #include "engine/layout/base_layout_json_loader.h"
@@ -24,6 +28,8 @@
 #include "tsf/edit/text_edit_plan.h"
 #include "tsf/service/text_service.h"
 #include "tsf/settings/user_settings.h"
+#include "ui/candidate/candidate_theme.h"
+#include "ui/candidate/candidate_window.h"
 
 namespace {
 
@@ -78,10 +84,22 @@ void TestInputSession() {
 
   const auto hanja_request = session.RequestHanjaConversion();
   assert(hanja_request.has_value());
-  assert(hanja_request->composing_syllable == "\xED\x95\x9C");
+  assert(hanja_request->query_text == "\xED\x95\x9C");
+  assert(hanja_request->kind ==
+         milkyway::engine::hanja::CandidateKind::kHanja);
+
+  session.UpdateComposition("\xE3\x85\x81");
+  const auto symbol_request = session.RequestHanjaConversion();
+  assert(symbol_request.has_value());
+  assert(symbol_request->query_text == "\xE3\x85\x81");
+  assert(symbol_request->kind ==
+         milkyway::engine::hanja::CandidateKind::kSymbol);
 
   session.UpdateComposition("\xEA\xB8\x80");
   assert(session.snapshot().preedit == "\xEA\xB8\x80");
+
+  session.UpdateComposition("\xED\x95\x9C\xEA\xB5\xAD");
+  assert(!session.RequestHanjaConversion().has_value());
 
   session.EndComposition(
       milkyway::engine::session::CompositionEndReason::kDelimiter);
@@ -90,6 +108,53 @@ void TestInputSession() {
   assert(session.last_end_reason() ==
          milkyway::engine::session::CompositionEndReason::kDelimiter);
   assert(!session.RequestHanjaConversion().has_value());
+}
+
+bool ContainsCandidateValue(
+    const std::vector<milkyway::engine::hanja::Candidate>& candidates,
+    std::string_view value) {
+  return std::any_of(candidates.begin(), candidates.end(),
+                     [value](const milkyway::engine::hanja::Candidate& item) {
+                       return item.value == value;
+                     });
+}
+
+void TestHanjaCandidateRequestValidation() {
+  using milkyway::engine::hanja::CandidateKind;
+  using milkyway::engine::hanja::CreateCandidateRequestFromPreedit;
+
+  const auto hanja = CreateCandidateRequestFromPreedit("\xED\x95\x9C");
+  assert(hanja.has_value());
+  assert(hanja->kind == CandidateKind::kHanja);
+
+  const auto symbol = CreateCandidateRequestFromPreedit("\xE3\x85\x81");
+  assert(symbol.has_value());
+  assert(symbol->kind == CandidateKind::kSymbol);
+
+  assert(!CreateCandidateRequestFromPreedit("").has_value());
+  assert(!CreateCandidateRequestFromPreedit("A").has_value());
+  assert(!CreateCandidateRequestFromPreedit("\xED\x95\x9C\xEA\xB5\xAD")
+              .has_value());
+  assert(!CreateCandidateRequestFromPreedit("\xE3\x85").has_value());
+}
+
+void TestLibhangulHanjaDictionary() {
+  using milkyway::adapters::dictionary::LibhangulHanjaDictionary;
+  using milkyway::engine::hanja::CandidateKind;
+  using milkyway::engine::hanja::CandidateRequest;
+
+  LibhangulHanjaDictionary dictionary;
+  dictionary.Preload();
+
+  const auto hanja_candidates =
+      dictionary.Lookup(CandidateRequest{"\xED\x95\x9C", CandidateKind::kHanja});
+  assert(!hanja_candidates.empty());
+  assert(ContainsCandidateValue(hanja_candidates, "\xE9\x9F\x93"));
+
+  const auto symbol_candidates = dictionary.Lookup(
+      CandidateRequest{"\xE3\x85\x81", CandidateKind::kSymbol});
+  assert(!symbol_candidates.empty());
+  assert(ContainsCandidateValue(symbol_candidates, "\xE2\x80\xBB"));
 }
 
 void TestLibhangulComposer() {
@@ -557,6 +622,36 @@ void TestTextServiceLifecycle(
   assert(!session.IsComposing());
   assert(session.last_end_reason() ==
          milkyway::engine::session::CompositionEndReason::kDelimiter);
+}
+
+void TestTextServiceCommitCandidate(
+    const milkyway::engine::layout::LayoutRegistry& registry) {
+  milkyway::engine::session::InputSession session(
+      registry.DefaultBaseLayout().id, registry.DefaultKoreanLayout().id);
+  RecordingEditSink sink;
+  milkyway::tsf::service::TextService service(
+      &session, milkyway::adapters::libhangul::CreateLibhangulComposer(),
+      &sink, &registry);
+
+  auto result =
+      service.OnKeyEvent(Key('G'), {}, milkyway::engine::key::KeyTransition::kPressed);
+  assert(result.preedit_text == "\xE3\x85\x8E");
+  result =
+      service.OnKeyEvent(Key('K'), {}, milkyway::engine::key::KeyTransition::kPressed);
+  assert(result.preedit_text == "\xED\x95\x98");
+  result =
+      service.OnKeyEvent(Key('S'), {}, milkyway::engine::key::KeyTransition::kPressed);
+  assert(result.preedit_text == "\xED\x95\x9C");
+
+  const bool committed = service.CommitCandidate("\xE9\x9F\x93");
+  assert(committed);
+  assert(!session.IsComposing());
+  assert(session.last_end_reason() ==
+         milkyway::engine::session::CompositionEndReason::kCandidateSelected);
+  assert(sink.operations.size() == 5);
+  AssertOperation(sink.operations[3], TextEditOperationType::kCommitText,
+                  "\xE9\x9F\x93");
+  AssertOperation(sink.operations[4], TextEditOperationType::kEndComposition, "");
 }
 
 void TestTextServiceBaseLayoutPrintableDelimiter(
@@ -1139,6 +1234,52 @@ void TestTextEditPlanPreservesEmptyCompositionUpdateBeforeCompletion() {
   assert(plan[1].type == PlannedEditActionType::kCompleteComposition);
 }
 
+void TestCandidateThemeSelection() {
+  using milkyway::ui::candidate::CandidateThemeMode;
+  using milkyway::ui::candidate::ChooseCandidateThemeMode;
+  using milkyway::ui::candidate::ThemeModeFromLightThemeRegistryValue;
+
+  assert(ThemeModeFromLightThemeRegistryValue(0).value() ==
+         CandidateThemeMode::kDark);
+  assert(ThemeModeFromLightThemeRegistryValue(1).value() ==
+         CandidateThemeMode::kLight);
+  assert(!ThemeModeFromLightThemeRegistryValue(2).has_value());
+
+  assert(ChooseCandidateThemeMode(0, 1) == CandidateThemeMode::kDark);
+  assert(ChooseCandidateThemeMode(1, 0) == CandidateThemeMode::kLight);
+  assert(ChooseCandidateThemeMode(std::nullopt, 0) ==
+         CandidateThemeMode::kDark);
+  assert(ChooseCandidateThemeMode(std::nullopt, std::nullopt) ==
+         CandidateThemeMode::kLight);
+}
+
+void TestCandidateWindowPlacement() {
+  using milkyway::ui::candidate::CalculateCandidateWindowOrigin;
+
+  const RECT work_area = {100, 100, 500, 500};
+  const SIZE window_size = {120, 90};
+
+  POINT origin =
+      CalculateCandidateWindowOrigin(work_area, window_size, POINT{180, 220});
+  assert(origin.x == 180);
+  assert(origin.y == 220);
+
+  origin =
+      CalculateCandidateWindowOrigin(work_area, window_size, POINT{180, 460});
+  assert(origin.x == 180);
+  assert(origin.y == 370);
+
+  origin =
+      CalculateCandidateWindowOrigin(work_area, window_size, POINT{40, 220});
+  assert(origin.x == 100);
+  assert(origin.y == 220);
+
+  origin =
+      CalculateCandidateWindowOrigin(work_area, window_size, POINT{450, 220});
+  assert(origin.x == 380);
+  assert(origin.y == 220);
+}
+
 }  // namespace
 
 int main() {
@@ -1158,6 +1299,8 @@ int main() {
   assert(registry.DefaultKoreanLayout().id == "libhangul:2");
 
   TestInputSession();
+  TestHanjaCandidateRequestValidation();
+  TestLibhangulHanjaDictionary();
   TestLibhangulComposer();
   TestLibhangulComposerAutoReorder();
   TestLibhangulComposerShiftFinalSsangSios();
@@ -1168,6 +1311,7 @@ int main() {
   TestUserSettingsResolver(registry);
   TestBaseLayoutJsonLoader(registry);
   TestTextServiceLifecycle(registry);
+  TestTextServiceCommitCandidate(registry);
   TestTextServiceBaseLayoutPrintableDelimiter(registry);
   TestTextServiceBackspaceClearsVisibleComposition(registry);
   TestTextServiceAutoReorder(registry);
@@ -1179,6 +1323,8 @@ int main() {
   TestTextEditPlanPreservesReorderedSyllableCommit();
   TestTextEditPlanCompletesCommittedCompositionText();
   TestTextEditPlanPreservesEmptyCompositionUpdateBeforeCompletion();
+  TestCandidateThemeSelection();
+  TestCandidateWindowPlacement();
 
   return 0;
 }

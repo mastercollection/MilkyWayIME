@@ -150,6 +150,20 @@ bool TextService::ReplaceComposer(
   return true;
 }
 
+bool TextService::CommitCandidate(std::string candidate_text) {
+  if (!session_->IsComposing() || candidate_text.empty()) {
+    return false;
+  }
+
+  composer_->Reset();
+  edit_sink_->Apply(edit::TextEditOperation{
+      edit::TextEditOperationType::kCommitText, std::move(candidate_text)});
+
+  edit::EndCompositionEditSession edit_session(
+      engine::session::CompositionEndReason::kCandidateSelected);
+  return edit_session.Apply(*session_, *edit_sink_);
+}
+
 bool TextService::PrepareImeModeToggle() {
   if (!session_->IsComposing()) {
     return false;

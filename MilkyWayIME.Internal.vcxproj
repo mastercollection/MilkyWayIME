@@ -40,7 +40,9 @@
     </ClCompile>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="src\adapters\dictionary\libhangul_hanja_dictionary.cpp" />
     <ClCompile Include="src\adapters\libhangul\libhangul_composer.cpp" />
+    <ClCompile Include="src\engine\hanja\candidate_request.cpp" />
     <ClCompile Include="src\engine\key\key_analysis.cpp" />
     <ClCompile Include="src\engine\layout\base_layout_json_loader.cpp" />
     <ClCompile Include="src\engine\layout\layout_registry.cpp" />
@@ -57,8 +59,12 @@
     <ClCompile Include="src\tsf\service\tip_text_service.cpp" />
     <ClCompile Include="src\tsf\settings\user_layout_paths.cpp" />
     <ClCompile Include="src\tsf\settings\user_settings.cpp" />
+    <ClCompile Include="src\tsf\candidate\candidate_list_ui.cpp" />
+    <ClCompile Include="src\ui\candidate\candidate_theme.cpp" />
+    <ClCompile Include="src\ui\candidate\candidate_window.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="src\adapters\dictionary\libhangul_hanja_dictionary.h" />
     <ClInclude Include="src\adapters\libhangul\hangul_composer.h" />
     <ClInclude Include="src\engine\composition\composition_snapshot.h" />
     <ClInclude Include="src\engine\hanja\candidate_request.h" />
@@ -74,6 +80,7 @@
     <ClInclude Include="src\engine\state\modifier_state.h" />
     <ClInclude Include="src\tsf\debug\debug_log.h" />
     <ClInclude Include="src\tsf\display\display_attribute.h" />
+    <ClInclude Include="src\tsf\candidate\candidate_list_ui.h" />
     <ClInclude Include="src\tsf\edit\composition_edit_session.h" />
     <ClInclude Include="src\tsf\edit\text_edit_plan.h" />
     <ClInclude Include="src\tsf\edit\text_edit_sink.h" />
@@ -85,6 +92,8 @@
     <ClInclude Include="src\tsf\service\tip_text_service.h" />
     <ClInclude Include="src\tsf\settings\user_layout_paths.h" />
     <ClInclude Include="src\tsf\settings\user_settings.h" />
+    <ClInclude Include="src\ui\candidate\candidate_theme.h" />
+    <ClInclude Include="src\ui\candidate\candidate_window.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets" />

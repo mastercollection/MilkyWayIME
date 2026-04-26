@@ -8,8 +8,10 @@ if not "%~1"=="" set "CONFIGURATION=%~1"
 if not "%~2"=="" set "PLATFORM=%~2"
 
 set "BUILD_DLL=%ROOT%\build\MilkyWayIME.Tsf\%PLATFORM%\%CONFIGURATION%\mwime_tsf.dll"
+set "SOURCE_HANJA_DIR=%ROOT%\external\libhangul\data\hanja"
 set "INSTALL_DIR=%ProgramW6432%\MilkyWayIME"
 set "INSTALL_DLL=%INSTALL_DIR%\mwime_tsf.dll"
+set "INSTALL_HANJA_DIR=%INSTALL_DIR%\data\hanja"
 set "REGSVR32=%SystemRoot%\System32\regsvr32.exe"
 set "CTFMON=%SystemRoot%\System32\ctfmon.exe"
 
@@ -42,6 +44,27 @@ copy /y "%BUILD_DLL%" "%INSTALL_DLL%" >nul
 if errorlevel 1 (
     echo [ERROR] Failed to copy DLL to install directory:
     echo %INSTALL_DLL%
+    exit /b 1
+)
+
+if not exist "%INSTALL_HANJA_DIR%" mkdir "%INSTALL_HANJA_DIR%"
+if errorlevel 1 (
+    echo [ERROR] Failed to create Hanja data directory:
+    echo %INSTALL_HANJA_DIR%
+    exit /b 1
+)
+
+copy /y "%SOURCE_HANJA_DIR%\hanja.txt" "%INSTALL_HANJA_DIR%\hanja.txt" >nul
+if errorlevel 1 (
+    echo [ERROR] Failed to copy hanja.txt to:
+    echo %INSTALL_HANJA_DIR%
+    exit /b 1
+)
+
+copy /y "%SOURCE_HANJA_DIR%\mssymbol.txt" "%INSTALL_HANJA_DIR%\mssymbol.txt" >nul
+if errorlevel 1 (
+    echo [ERROR] Failed to copy mssymbol.txt to:
+    echo %INSTALL_HANJA_DIR%
     exit /b 1
 )
 

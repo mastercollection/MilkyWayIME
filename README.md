@@ -7,7 +7,8 @@ MilkyWayIME is a Korean TSF IME project for Windows.
 - Separate the user's base layout from Korean composition.
 - Convert input labels through the selected base layout to fixed QWERTY/libhangul tokens for Korean composition.
 - Interpret shortcuts from the input labels reported by Windows/TSF.
-- Support Hanja candidate selection from the current composing Korean syllable.
+- Support Hanja and symbol candidate selection from the current composing
+  single Hangul unit.
 - Keep the project extensible for future custom layouts.
 
 ## libhangul
@@ -32,6 +33,9 @@ This repository currently contains an early but manually testable TSF path:
 - `src/tsf` for the initial Windows TSF composition lifecycle layer and the
   minimum COM text service runtime
 - `src/adapters/libhangul` for the statically linked `libhangul` integration boundary
+- `src/adapters/dictionary` for libhangul Hanja and symbol dictionary lookup
+- `src/ui/candidate` and `src/tsf/candidate` for candidate list presentation
+  and TSF UI element integration
 - `data/layouts` for layout schema samples and future custom layout data
 - `tests` for unit, layout, and integration test structure
 
@@ -170,7 +174,9 @@ Run both scripts from an elevated Command Prompt.
 
 The registration script copies `build\MilkyWayIME.Tsf\x64\Debug\mwime_tsf.dll` to
 `%ProgramW6432%\MilkyWayIME\mwime_tsf.dll`, registers that installed copy
-through `regsvr32`, and restarts `ctfmon.exe` so the TSF profile refreshes.
+through `regsvr32`, copies `hanja.txt` and `mssymbol.txt` into
+`%ProgramW6432%\MilkyWayIME\data\hanja`, and restarts `ctfmon.exe` so the TSF
+profile refreshes.
 
 The unregister script defaults to `%ProgramW6432%\MilkyWayIME\mwime_tsf.dll`
 and calls the DLL's `DllUnregisterServer` export through `regsvr32`.
@@ -194,9 +200,15 @@ Use the current build only as a developer smoke test target.
    - Losing focus commits the current syllable instead of dropping it.
    - The current composing last syllable is shown with a dotted underline when
      the target app honors TSF display attributes.
+   - `한` followed by the Hanja key opens Hanja candidates, number keys or
+     `Enter` commit the selected candidate, and `Esc` keeps the composing text.
+   - `ㅁ` followed by the Hanja key opens symbol candidates including `※`.
+   - Candidate colors follow the Windows app light/dark theme and high contrast
+     system colors.
 
-This stage still does not include candidate UI, Hanja selection UI, or an
-installer.
+This stage still does not include a user-facing installer or Hanja conversion
+for Shift-selected already committed text. Candidate lookup intentionally uses
+exact one-character lookup only; word-level conversion remains out of scope.
 
 ## Test Execution
 

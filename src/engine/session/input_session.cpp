@@ -59,7 +59,7 @@ std::optional<hanja::CandidateRequest> InputSession::RequestHanjaConversion()
     return std::nullopt;
   }
 
-  return hanja::CandidateRequest{snapshot_.preedit};
+  return hanja::CreateCandidateRequestFromPreedit(snapshot_.preedit);
 }
 
 }  // namespace milkyway::engine::session

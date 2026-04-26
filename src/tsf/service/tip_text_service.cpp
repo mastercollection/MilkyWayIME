@@ -7,6 +7,7 @@
 #include <exception>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -35,8 +36,44 @@ bool KeyPressed(int virtual_key) {
   return (GetKeyState(virtual_key) & 0x8000) != 0;
 }
 
+bool IsUsableScreenRect(const RECT& rect) {
+  if (rect.left == 0 && rect.top == 0 && rect.right == 0 &&
+      rect.bottom == 0) {
+    return false;
+  }
+
+  return rect.right >= rect.left && rect.bottom > rect.top;
+}
+
+std::optional<POINT> AnchorFromGuiThreadCaret() {
+  GUITHREADINFO gui_thread_info = {};
+  gui_thread_info.cbSize = sizeof(gui_thread_info);
+  if (!GetGUIThreadInfo(0, &gui_thread_info)) {
+    return std::nullopt;
+  }
+
+  if (IsUsableScreenRect(gui_thread_info.rcCaret)) {
+    return POINT{gui_thread_info.rcCaret.left, gui_thread_info.rcCaret.bottom};
+  }
+
+  if (gui_thread_info.hwndCaret != nullptr) {
+    POINT caret = {};
+    if (GetCaretPos(&caret) && ClientToScreen(gui_thread_info.hwndCaret,
+                                               &caret)) {
+      return caret;
+    }
+  }
+
+  return std::nullopt;
+}
+
 bool IsImeModeToggleVirtualKey(WPARAM wparam) {
   return static_cast<std::uint16_t>(wparam) == VK_HANGUL;
+}
+
+bool IsHanjaVirtualKey(WPARAM wparam) {
+  const auto key = static_cast<std::uint16_t>(wparam);
+  return key == VK_HANJA || key == VK_KANJI;
 }
 
 constexpr GUID kImeModePreservedKeyGuid = {
@@ -49,10 +86,114 @@ constexpr GUID kImeModePreservedKeyGuid = {
 constexpr wchar_t kImeModePreservedKeyDescription[] =
     L"MilkyWayIME Hangul toggle";
 
+class TextExtentEditSession final : public ITfEditSession {
+ public:
+  TextExtentEditSession(ITfContextView* view, ITfRange* range,
+                        std::optional<RECT>* text_rect)
+      : view_(view), range_(range), text_rect_(text_rect) {
+    view_->AddRef();
+    range_->AddRef();
+  }
+
+  ~TextExtentEditSession() {
+    range_->Release();
+    view_->Release();
+  }
+
+  STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override {
+    if (ppv == nullptr) {
+      return E_INVALIDARG;
+    }
+
+    *ppv = nullptr;
+    if (riid == IID_IUnknown || riid == IID_ITfEditSession) {
+      *ppv = static_cast<ITfEditSession*>(this);
+      AddRef();
+      return S_OK;
+    }
+
+    return E_NOINTERFACE;
+  }
+
+  STDMETHODIMP_(ULONG) AddRef() override {
+    return ++ref_count_;
+  }
+
+  STDMETHODIMP_(ULONG) Release() override {
+    const ULONG value = --ref_count_;
+    if (value == 0) {
+      delete this;
+    }
+    return value;
+  }
+
+  STDMETHODIMP DoEditSession(TfEditCookie edit_cookie) override {
+    RECT rect = {};
+    BOOL clipped = FALSE;
+    const HRESULT hr = view_->GetTextExt(edit_cookie, range_, &rect, &clipped);
+    if (SUCCEEDED(hr) && IsUsableScreenRect(rect)) {
+      *text_rect_ = rect;
+    }
+    return S_OK;
+  }
+
+ private:
+  std::atomic<ULONG> ref_count_{1};
+  ITfContextView* view_ = nullptr;
+  ITfRange* range_ = nullptr;
+  std::optional<RECT>* text_rect_ = nullptr;
+};
+
 std::wstring FormatHex(std::uint32_t value) {
   wchar_t buffer[16] = {};
   swprintf_s(buffer, L"%08X", value);
   return buffer;
+}
+
+std::wstring Utf8ToWideText(std::string_view text) {
+  if (text.empty()) {
+    return {};
+  }
+
+  const int length =
+      MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(),
+                          static_cast<int>(text.size()), nullptr, 0);
+  if (length <= 0) {
+    return {};
+  }
+
+  std::wstring wide_text(static_cast<std::size_t>(length), L'\0');
+  MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(),
+                      static_cast<int>(text.size()), wide_text.data(), length);
+  return wide_text;
+}
+
+adapters::dictionary::HanjaDictionaryPaths ResolveHanjaDictionaryPaths() {
+  adapters::dictionary::HanjaDictionaryPaths paths =
+      adapters::dictionary::DefaultHanjaDictionaryPaths();
+
+  const std::wstring module_path =
+      registration::ModulePath(ModuleInstance());
+  if (module_path.empty()) {
+    return paths;
+  }
+
+  const std::filesystem::path installed_hanja_dir =
+      std::filesystem::path(module_path).parent_path() / L"data" / L"hanja";
+  std::error_code error_code;
+  const std::filesystem::path installed_hanja =
+      installed_hanja_dir / L"hanja.txt";
+  const std::filesystem::path installed_symbol =
+      installed_hanja_dir / L"mssymbol.txt";
+  if (std::filesystem::is_regular_file(installed_hanja, error_code)) {
+    paths.hanja_path = installed_hanja;
+  }
+  error_code.clear();
+  if (std::filesystem::is_regular_file(installed_symbol, error_code)) {
+    paths.symbol_path = installed_symbol;
+  }
+
+  return paths;
 }
 
 std::unique_ptr<adapters::libhangul::HangulComposer>
@@ -72,20 +213,10 @@ CreateComposerForKoreanLayout(
 #if defined(_DEBUG)
 
 std::wstring Utf8ToWide(std::string_view text) {
-  if (text.empty()) {
-    return {};
-  }
-
-  const int length =
-      MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(),
-                          static_cast<int>(text.size()), nullptr, 0);
-  if (length <= 0) {
+  std::wstring wide_text = Utf8ToWideText(text);
+  if (wide_text.empty() && !text.empty()) {
     return L"<invalid-utf8>";
   }
-
-  std::wstring wide_text(static_cast<std::size_t>(length), L'\0');
-  MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(),
-                      static_cast<int>(text.size()), wide_text.data(), length);
   return wide_text;
 }
 
@@ -289,7 +420,8 @@ HRESULT TipTextService::CreateInstance(IUnknown* outer, REFIID riid,
 }
 
 TipTextService::TipTextService()
-    : session_(layout_registry_.DefaultBaseLayout().id,
+    : hanja_dictionary_(ResolveHanjaDictionaryPaths()),
+      session_(layout_registry_.DefaultBaseLayout().id,
                layout_registry_.DefaultKoreanLayout().id),
       edit_sink_(this),
       logic_(&session_, adapters::libhangul::CreateLibhangulComposer(),
@@ -311,6 +443,7 @@ TipTextService::TipTextService()
     session_.SetLayouts(user_settings.base_layout_id,
                         user_settings.korean_layout_id);
   }
+  hanja_dictionary_.Preload();
   DllAddRef();
 }
 
@@ -319,6 +452,7 @@ TipTextService::~TipTextService() {
     Deactivate();
   }
 
+  CloseCandidateList();
   ClearCompositionTracking();
   DllRelease();
 }
@@ -499,6 +633,7 @@ STDMETHODIMP TipTextService::Deactivate() {
 #endif
   deactivating_ = true;
 
+  CloseCandidateList();
   if (session_.IsComposing() && text_edit_sink_context_ != nullptr) {
     logic_.OnFocusLost();
     FlushPendingOperations(text_edit_sink_context_,
@@ -547,6 +682,7 @@ STDMETHODIMP TipTextService::OnSetFocus(ITfDocumentMgr* focused,
                   std::to_wstring(session_.IsComposing() ? 1 : 0));
 #endif
   if (text_edit_sink_context_ != nullptr && session_.IsComposing()) {
+    CloseCandidateList();
     logic_.OnFocusLost();
     FlushPendingOperations(text_edit_sink_context_,
                            EditSessionRequestPolicy::kSyncPreferredWrite,
@@ -590,6 +726,7 @@ STDMETHODIMP TipTextService::OnEndEdit(ITfContext* context,
   }
 
   if (!SelectionInsideComposition(context, read_cookie)) {
+    CloseCandidateList();
     logic_.OnSelectionMovedOutsideComposition();
     FlushPendingOperations(context, EditSessionRequestPolicy::kSyncPreferredWrite,
                            L"OnEndEdit");
@@ -633,6 +770,23 @@ STDMETHODIMP TipTextService::OnTestKeyDown(ITfContext* context, WPARAM wparam,
     pending_key_result_.event = event;
     pending_key_result_.eaten = true;
     *eaten = TRUE;
+    return S_OK;
+  }
+
+  if (candidate_list_ != nullptr) {
+    pending_key_result_.active = true;
+    pending_key_result_.event = event;
+    pending_key_result_.eaten =
+        !candidate::IsPureModifierVirtualKey(wparam);
+    *eaten = pending_key_result_.eaten ? TRUE : FALSE;
+    return S_OK;
+  }
+
+  if (IsHanjaVirtualKey(wparam)) {
+    pending_key_result_.active = true;
+    pending_key_result_.event = event;
+    pending_key_result_.eaten = ime_open_ && session_.IsComposing();
+    *eaten = pending_key_result_.eaten ? TRUE : FALSE;
     return S_OK;
   }
 
@@ -680,7 +834,30 @@ STDMETHODIMP TipTextService::OnKeyDown(ITfContext* context, WPARAM wparam,
     return S_OK;
   }
 
+  if (candidate_list_ != nullptr &&
+      !candidate::IsPureModifierVirtualKey(wparam)) {
+    ClearPendingKeyResult();
+    const candidate::CandidateKeyResult candidate_key_result =
+        candidate_list_->HandleVirtualKey(wparam);
+    if (candidate_key_result == candidate::CandidateKeyResult::kCommit) {
+      OnCandidateListFinalize();
+    } else if (candidate_key_result == candidate::CandidateKeyResult::kCancel) {
+      OnCandidateListAbort();
+    }
+    *eaten = TRUE;
+    return S_OK;
+  }
+
   if (context == nullptr) {
+    return S_OK;
+  }
+
+  if (IsHanjaVirtualKey(wparam)) {
+    ClearPendingKeyResult();
+    if (ime_open_ && session_.IsComposing()) {
+      HandleHanjaKey(context);
+      *eaten = TRUE;
+    }
     return S_OK;
   }
 
@@ -807,6 +984,7 @@ STDMETHODIMP TipTextService::OnCompositionTerminated(TfEditCookie edit_cookie,
                                                      ITfComposition* composition) {
   const bool tracked = composition_ == composition;
   if (tracked) {
+    CloseCandidateList();
     if (composition_context_ != nullptr) {
       ClearCompositionDisplayAttribute(edit_cookie, composition_context_);
     }
@@ -849,6 +1027,7 @@ STDMETHODIMP TipTextService::OnKillThreadFocus() {
                   PointerToString(text_edit_sink_context_) + L" composing=" +
                   std::to_wstring(session_.IsComposing() ? 1 : 0));
 #endif
+  CloseCandidateList();
   return S_OK;
 }
 
@@ -880,6 +1059,41 @@ STDMETHODIMP TipTextService::EnumDisplayAttributeInfo(
 STDMETHODIMP TipTextService::GetDisplayAttributeInfo(
     REFGUID guid_info, ITfDisplayAttributeInfo** info) {
   return display::CreateDisplayAttributeInfo(guid_info, info);
+}
+
+void TipTextService::OnCandidateListFinalize() {
+  if (candidate_list_ == nullptr) {
+    return;
+  }
+
+  const candidate::CandidateUiItem* selected_item =
+      candidate_list_->SelectedItem();
+  const std::string candidate_text =
+      selected_item != nullptr ? selected_item->value_utf8 : std::string();
+  CloseCandidateList();
+  if (candidate_text.empty()) {
+    return;
+  }
+
+  if (!logic_.CommitCandidate(candidate_text)) {
+    return;
+  }
+
+  if (composition_context_ == nullptr) {
+    SyncCompositionTermination();
+    return;
+  }
+
+  const HRESULT hr = FlushPendingOperations(
+      composition_context_, EditSessionRequestPolicy::kKeyPathWrite,
+      L"CandidateFinalize");
+  if (FAILED(hr)) {
+    SyncCompositionTermination();
+  }
+}
+
+void TipTextService::OnCandidateListAbort() {
+  CloseCandidateList();
 }
 
 TfClientId TipTextService::client_id() const {
@@ -1740,6 +1954,7 @@ void TipTextService::ApplyLayoutSelection(
   }
 
   ClearPendingKeyResult();
+  CloseCandidateList();
   if (logic_.PrepareLayoutChange()) {
     if (text_edit_sink_context_ != nullptr) {
       const HRESULT flush_hr =
@@ -1831,6 +2046,149 @@ void TipTextService::HandleShortcutAction(
       SyncCompositionTermination();
     }
   }
+}
+
+bool TipTextService::HandleHanjaKey(ITfContext* context) {
+  CloseCandidateList();
+  if (!session_.IsComposing()) {
+    return false;
+  }
+
+  const std::optional<engine::hanja::CandidateRequest> request =
+      session_.RequestHanjaConversion();
+  if (!request.has_value()) {
+    return true;
+  }
+
+  const std::vector<engine::hanja::Candidate> candidates =
+      hanja_dictionary_.Lookup(*request);
+  if (candidates.empty()) {
+    return true;
+  }
+
+  return OpenCandidateList(context, candidates);
+}
+
+bool TipTextService::OpenCandidateList(
+    ITfContext* context,
+    const std::vector<engine::hanja::Candidate>& candidates) {
+  if (thread_mgr_ == nullptr || candidates.empty()) {
+    return false;
+  }
+
+  ITfDocumentMgr* document_mgr = nullptr;
+  if (context != nullptr) {
+    context->GetDocumentMgr(&document_mgr);
+  }
+
+  std::vector<candidate::CandidateUiItem> items;
+  items.reserve(candidates.size());
+  for (const engine::hanja::Candidate& candidate : candidates) {
+    const std::wstring display_text = Utf8ToWideText(candidate.value);
+    if (display_text.empty()) {
+      continue;
+    }
+    items.push_back(candidate::CandidateUiItem{
+        candidate.value,
+        display_text,
+    });
+  }
+
+  if (items.empty()) {
+    SafeRelease(document_mgr);
+    return false;
+  }
+
+  candidate_list_ = new (std::nothrow) candidate::CandidateListUi(
+      thread_mgr_, document_mgr, ModuleInstance(), this, std::move(items));
+  SafeRelease(document_mgr);
+  if (candidate_list_ == nullptr) {
+    return false;
+  }
+
+  if (!candidate_list_->Begin()) {
+    CloseCandidateList();
+    return false;
+  }
+
+  const std::optional<POINT> anchor = CandidateWindowAnchor(context);
+  if (!anchor.has_value() || !candidate_list_->ShowAt(*anchor)) {
+    CloseCandidateList();
+    return false;
+  }
+
+  return true;
+}
+
+void TipTextService::CloseCandidateList() {
+  if (candidate_list_ == nullptr) {
+    return;
+  }
+
+  candidate_list_->End();
+  candidate_list_->Release();
+  candidate_list_ = nullptr;
+}
+
+std::optional<POINT> TipTextService::CandidateWindowAnchor(
+    ITfContext* context) const {
+  const std::optional<RECT> composition_rect = CompositionTextRect(context);
+  if (composition_rect.has_value()) {
+    return POINT{composition_rect->left, composition_rect->bottom};
+  }
+
+  const std::optional<POINT> caret_anchor = AnchorFromGuiThreadCaret();
+  if (caret_anchor.has_value()) {
+    return caret_anchor;
+  }
+
+  POINT cursor = {};
+  if (GetCursorPos(&cursor)) {
+    return cursor;
+  }
+
+  return std::nullopt;
+}
+
+std::optional<RECT> TipTextService::CompositionTextRect(
+    ITfContext* context) const {
+  if (context == nullptr || composition_ == nullptr ||
+      context != composition_context_ || client_id_ == TF_CLIENTID_NULL) {
+    return std::nullopt;
+  }
+
+  ITfContextView* view = nullptr;
+  HRESULT hr = context->GetActiveView(&view);
+  if (FAILED(hr) || view == nullptr) {
+    return std::nullopt;
+  }
+
+  ITfRange* range = nullptr;
+  hr = composition_->GetRange(&range);
+  if (FAILED(hr) || range == nullptr) {
+    SafeRelease(view);
+    return std::nullopt;
+  }
+
+  std::optional<RECT> text_rect;
+  TextExtentEditSession* edit_session =
+      new (std::nothrow) TextExtentEditSession(view, range, &text_rect);
+  SafeRelease(range);
+  SafeRelease(view);
+  if (edit_session == nullptr) {
+    return std::nullopt;
+  }
+
+  HRESULT edit_session_result = E_FAIL;
+  hr = context->RequestEditSession(client_id_, edit_session,
+                                   TF_ES_SYNC | TF_ES_READ,
+                                   &edit_session_result);
+  edit_session->Release();
+  if (FAILED(hr) || FAILED(edit_session_result)) {
+    return std::nullopt;
+  }
+
+  return text_rect;
 }
 
 HRESULT TipTextService::MoveSelectionToRangeEnd(TfEditCookie edit_cookie,

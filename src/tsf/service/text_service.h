@@ -49,6 +49,7 @@ class TextService {
                             engine::key::KeyTransition transition);
   bool ReplaceComposer(
       std::unique_ptr<adapters::libhangul::HangulComposer> composer);
+  bool CommitCandidate(std::string candidate_text);
   bool PrepareImeModeToggle();
   bool PrepareLayoutChange();
   bool OnFocusLost();

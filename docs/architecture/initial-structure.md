@@ -18,7 +18,10 @@ MilkyWayIME starts from four explicit boundaries:
   `data/layouts` remains the schema/sample home for future custom layout files.
 - User settings persist selected IDs only: `BaseLayoutId` and `KoreanLayoutId`.
   Settings do not store base layout mappings or libhangul XML contents.
-- Hanja conversion requests must operate on the current composing syllable only.
+- Hanja conversion requests must operate on the current composing single Hangul
+  unit only. Complete Hangul syllables use the Hanja dictionary, compatibility
+  jamo use the symbol dictionary, and Shift-selected already committed text is
+  reserved for a future feature.
 - `base layout` means the user's current key-label arrangement as seen through Windows/TSF input labels. It is not a raw hardware switch matrix.
 - TSF key events are normalized first to an `input_label_key`. Shortcuts are resolved from that input label and modifier state.
 - Hangul composition uses the selected base layout's inverse map to convert the input label into the fixed QWERTY/libhangul token before forwarding input to `libhangul`.
