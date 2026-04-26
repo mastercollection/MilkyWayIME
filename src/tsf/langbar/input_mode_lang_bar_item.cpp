@@ -159,12 +159,17 @@ HMENU BuildUserLayoutFolderSubmenu() {
   }
 
   if (!AppendMenuString(menu, kMenuOpenBaseLayoutFolder, 0,
-                        L"키보드 배열 폴더") ||
-      !AppendMenuString(menu, kMenuOpenKoreanLayoutFolder, 0,
-                        L"한글 자판 폴더")) {
+                        L"키보드 배열 폴더")) {
     DestroyMenu(menu);
     return nullptr;
   }
+
+  // TODO: Re-enable when custom Korean layout XML loading is implemented.
+  // if (!AppendMenuString(menu, kMenuOpenKoreanLayoutFolder, 0,
+  //                       L"한글 자판 폴더")) {
+  //   DestroyMenu(menu);
+  //   return nullptr;
+  // }
 
   return menu;
 }
@@ -463,10 +468,11 @@ STDMETHODIMP InputModeLangBarItem::OnMenuSelect(UINT menu_id) {
     return S_OK;
   }
 
-  if (menu_id == kMenuOpenKoreanLayoutFolder) {
-    OpenUserLayoutFolder(settings::UserKoreanLayoutDirectory());
-    return S_OK;
-  }
+  // TODO: Re-enable when custom Korean layout XML loading is implemented.
+  // if (menu_id == kMenuOpenKoreanLayoutFolder) {
+  //   OpenUserLayoutFolder(settings::UserKoreanLayoutDirectory());
+  //   return S_OK;
+  // }
 
   return S_OK;
 }
