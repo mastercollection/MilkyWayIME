@@ -29,4 +29,4 @@ MilkyWayIME starts from four explicit boundaries:
 - `MilkyWayIME.sln` is the source of truth for local development builds.
 - The solution contains one production DLL project: `MilkyWayIME.Tsf`.
 - `MilkyWayIME.Internal` exists only to share repo-owned implementation code across the DLL and test projects.
-- A future settings UI, if added, should be a separate project instead of stretching the TSF DLL boundary.
+- The TSF DLL owns the minimal language bar settings menu and HKCU settings persistence. A future full settings UI, if added, should be a separate project instead of stretching the TSF DLL boundary.

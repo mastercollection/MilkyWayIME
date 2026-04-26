@@ -26,6 +26,46 @@ KeyEventCategory ToServiceCategory(engine::key::KeyCategory category) {
   return KeyEventCategory::kUnhandled;
 }
 
+std::string PrintableTokenText(engine::key::LayoutKey key, bool shift) {
+  using engine::key::LayoutKey;
+
+  if (key >= LayoutKey::kDigit0 && key <= LayoutKey::kDigit9) {
+    constexpr char kNormalDigits[] = "0123456789";
+    constexpr char kShiftDigits[] = ")!@#$%^&*(";
+    const int index = static_cast<int>(key) - static_cast<int>(LayoutKey::kDigit0);
+    return std::string(1, shift ? kShiftDigits[index] : kNormalDigits[index]);
+  }
+
+  switch (key) {
+    case LayoutKey::kSpace:
+      return " ";
+    case LayoutKey::kOem1:
+      return shift ? ":" : ";";
+    case LayoutKey::kOemPlus:
+      return shift ? "+" : "=";
+    case LayoutKey::kOemComma:
+      return shift ? "<" : ",";
+    case LayoutKey::kOemMinus:
+      return shift ? "_" : "-";
+    case LayoutKey::kOemPeriod:
+      return shift ? ">" : ".";
+    case LayoutKey::kOem2:
+      return shift ? "?" : "/";
+    case LayoutKey::kOem3:
+      return shift ? "~" : "`";
+    case LayoutKey::kOem4:
+      return shift ? "{" : "[";
+    case LayoutKey::kOem5:
+      return shift ? "|" : "\\";
+    case LayoutKey::kOem6:
+      return shift ? "}" : "]";
+    case LayoutKey::kOem7:
+      return shift ? "\"" : "'";
+    default:
+      return {};
+  }
+}
+
 }  // namespace
 
 TextService::TextService(
@@ -54,6 +94,9 @@ bool TextService::WouldEatKey(
     case KeyEventCategory::kBackspace:
       return session_->IsComposing();
     case KeyEventCategory::kDelimiter:
+      return !PrintableTokenText(analysis.hangul_token_key,
+                                 analysis.event.UsesHangulShift())
+                  .empty();
     case KeyEventCategory::kPureModifier:
     case KeyEventCategory::kUnhandled:
       return false;
@@ -89,7 +132,7 @@ KeyEventResult TextService::OnKeyEvent(
     }
     case KeyEventCategory::kDelimiter:
     case KeyEventCategory::kUnhandled:
-      return HandleDelimiterOrUnhandled(category);
+      return HandleDelimiterOrUnhandled(analysis, category);
     case KeyEventCategory::kModifiedShortcut:
       return HandleModifiedShortcut(analysis);
   }
@@ -112,6 +155,25 @@ bool TextService::PrepareImeModeToggle() {
       engine::session::CompositionEndReason::kImeModeToggle);
   edit_session.Apply(*session_, *edit_sink_);
   return true;
+}
+
+bool TextService::PrepareLayoutChange() {
+  if (!session_->IsComposing()) {
+    composer_->Reset();
+    return false;
+  }
+
+  const std::string commit_text = composer_->Flush();
+  if (!commit_text.empty()) {
+    edit_sink_->Apply(edit::TextEditOperation{
+        edit::TextEditOperationType::kCommitText, commit_text});
+  }
+
+  edit::EndCompositionEditSession edit_session(
+      engine::session::CompositionEndReason::kLayoutChanged);
+  const bool ended = edit_session.Apply(*session_, *edit_sink_);
+  composer_->Reset();
+  return ended;
 }
 
 bool TextService::OnFocusLost() {
@@ -155,7 +217,7 @@ KeyEventResult TextService::HandleHangulAscii(
   result.category = KeyEventCategory::kHangulAscii;
 
   if (!analysis.hangul_input.is_mapped) {
-    return HandleDelimiterOrUnhandled(KeyEventCategory::kUnhandled);
+    return HandleDelimiterOrUnhandled(analysis, KeyEventCategory::kUnhandled);
   }
 
   const adapters::libhangul::HangulInputResult composer_result =
@@ -220,9 +282,43 @@ KeyEventResult TextService::HandleBackspace() {
 }
 
 KeyEventResult TextService::HandleDelimiterOrUnhandled(
-    KeyEventCategory category) {
+    const engine::key::KeyAnalysis& analysis, KeyEventCategory category) {
   KeyEventResult result;
   result.category = category;
+
+  if (category == KeyEventCategory::kDelimiter) {
+    const std::string printable_text = PrintableTokenText(
+        analysis.hangul_token_key, analysis.event.UsesHangulShift());
+    if (!printable_text.empty()) {
+      std::string text_to_commit;
+      if (session_->IsComposing()) {
+        if (composer_ != nullptr) {
+          text_to_commit = composer_->Flush();
+          composer_->Reset();
+        }
+        if (text_to_commit.empty()) {
+          text_to_commit = session_->snapshot().preedit;
+        }
+      }
+      text_to_commit += printable_text;
+
+      if (!text_to_commit.empty()) {
+        edit_sink_->Apply(edit::TextEditOperation{
+            edit::TextEditOperationType::kCommitText, text_to_commit});
+      }
+
+      if (session_->IsComposing()) {
+        edit::EndCompositionEditSession edit_session(
+            engine::session::CompositionEndReason::kDelimiter);
+        edit_session.Apply(*session_, *edit_sink_);
+      }
+
+      result.commit_text = text_to_commit;
+      result.eaten = true;
+      result.should_forward = false;
+      return result;
+    }
+  }
 
   if (session_->IsComposing()) {
     EndActiveComposition(engine::session::CompositionEndReason::kDelimiter);

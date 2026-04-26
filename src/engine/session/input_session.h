@@ -19,6 +19,7 @@ enum class CompositionEndReason {
   kSelectionMoved,
   kExternalTermination,
   kShortcutBypass,
+  kLayoutChanged,
 };
 
 class InputSession {

@@ -52,6 +52,16 @@ Therefore input label `R` maps back to libhangul token `s`, producing `ㄴ` in
 two-beolsik. Shortcuts are resolved from the original input label, not from the
 Hangul token.
 
+## Settings
+
+MilkyWayIME exposes the current user settings through the language bar menu.
+The first supported setting is the base layout: `us_qwerty`, `colemak`, or
+`colemak_dh`. The selected base layout is stored under
+`HKCU\Software\MilkyWayIME\Settings` and is loaded when the text service starts.
+
+There is no dedicated settings window yet, and `Ctrl+Alt+O` is intentionally not
+registered as a settings shortcut.
+
 ## Initial Layout
 
 ```text
@@ -132,6 +142,8 @@ Use the current build only as a developer smoke test target.
    - `VK_HANGUL` commits the current syllable and toggles IME open/close state.
    - `Ctrl+Shift+Space` commits the current syllable and toggles IME open/close state.
    - The language bar or tray input-mode indicator switches between `가` and `A`.
+   - The language bar menu can switch the base layout and keeps the selection
+     under `HKCU\Software\MilkyWayIME\Settings`.
    - The profile icon uses the MilkyWayIME brand icon instead of the plain text fallback.
    - Losing focus commits the current syllable instead of dropping it.
    - The current composing last syllable is shown with a dotted underline when

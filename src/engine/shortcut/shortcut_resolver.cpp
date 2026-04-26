@@ -12,11 +12,6 @@ ShortcutAction ShortcutResolver::Resolve(const ShortcutQuery& query) const {
     return ShortcutAction::kToggleInputMode;
   }
 
-  if (query.modifiers.ctrl && query.modifiers.alt &&
-      query.input_label_key == key::LayoutKey::kO) {
-    return ShortcutAction::kOpenConfiguration;
-  }
-
   return ShortcutAction::kNone;
 }
 

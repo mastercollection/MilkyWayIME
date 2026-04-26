@@ -12,6 +12,7 @@
 #include "tsf/debug/debug_log.h"
 #include "tsf/registration/text_service_registration.h"
 #include "tsf/service/module_state.h"
+#include "tsf/settings/user_settings.h"
 
 namespace milkyway::tsf::service {
 namespace {
@@ -123,8 +124,6 @@ const wchar_t* ShortcutActionName(engine::shortcut::ShortcutAction action) {
       return L"None";
     case engine::shortcut::ShortcutAction::kToggleInputMode:
       return L"ToggleInputMode";
-    case engine::shortcut::ShortcutAction::kOpenConfiguration:
-      return L"OpenConfiguration";
   }
 
   return L"Unknown";
@@ -198,6 +197,10 @@ TipTextService::TipTextService()
       edit_sink_(this),
       logic_(&session_, adapters::libhangul::CreateLibhangulComposer(),
              &edit_sink_, &layout_registry_) {
+  const settings::UserSettings user_settings =
+      settings::LoadUserSettings(layout_registry_);
+  session_.SetLayouts(user_settings.physical_layout_id,
+                      user_settings.korean_layout_id);
   DllAddRef();
 }
 
@@ -440,21 +443,33 @@ STDMETHODIMP TipTextService::OnSetFocus(ITfDocumentMgr* focused,
                            L"OnSetFocus(DocumentMgr)");
   }
 
-  return RefreshFocusedContext(focused);
+  const HRESULT refresh_hr = RefreshFocusedContext(focused);
+  if (SUCCEEDED(refresh_hr)) {
+    SyncLayoutSelectionFromSettings(L"OnSetFocus(DocumentMgr)");
+  }
+  return refresh_hr;
 }
 
 STDMETHODIMP TipTextService::OnPushContext(ITfContext*) {
 #if defined(_DEBUG)
   debug::DebugLog(L"[MilkyWayIME][OnPushContext]");
 #endif
-  return RefreshFocusedContext();
+  const HRESULT refresh_hr = RefreshFocusedContext();
+  if (SUCCEEDED(refresh_hr)) {
+    SyncLayoutSelectionFromSettings(L"OnPushContext");
+  }
+  return refresh_hr;
 }
 
 STDMETHODIMP TipTextService::OnPopContext(ITfContext*) {
 #if defined(_DEBUG)
   debug::DebugLog(L"[MilkyWayIME][OnPopContext]");
 #endif
-  return RefreshFocusedContext();
+  const HRESULT refresh_hr = RefreshFocusedContext();
+  if (SUCCEEDED(refresh_hr)) {
+    SyncLayoutSelectionFromSettings(L"OnPopContext");
+  }
+  return refresh_hr;
 }
 
 STDMETHODIMP TipTextService::OnEndEdit(ITfContext* context,
@@ -479,6 +494,9 @@ STDMETHODIMP TipTextService::OnSetFocus(BOOL foreground) {
                   std::to_wstring(foreground ? 1 : 0) + L" process=" +
                   CurrentProcessName());
 #endif
+  if (foreground) {
+    SyncLayoutSelectionFromSettings(L"ITfKeyEventSink::OnSetFocus");
+  }
   return S_OK;
 }
 
@@ -489,6 +507,7 @@ STDMETHODIMP TipTextService::OnTestKeyDown(ITfContext* context, WPARAM wparam,
   }
 
   *eaten = FALSE;
+  SyncLayoutSelectionFromSettings(L"OnKeyDown");
   const engine::state::ModifierState modifiers = QueryModifierState();
   const engine::key::NormalizedKeyEvent event = BuildNormalizedKeyEvent(
       wparam, lparam, modifiers, engine::key::KeyTransition::kPressed);
@@ -700,6 +719,9 @@ STDMETHODIMP TipTextService::OnSetThreadFocus() {
 #endif
 
   const HRESULT hr = RefreshFocusedContext();
+  if (SUCCEEDED(hr)) {
+    SyncLayoutSelectionFromSettings(L"OnSetThreadFocus");
+  }
 #if defined(_DEBUG)
   if (FAILED(hr)) {
     debug::DebugLog(L"[MilkyWayIME][OnSetThreadFocus][RefreshFocusedContextFailed] hr=0x" +
@@ -771,10 +793,19 @@ HRESULT TipTextService::CommitText(TfEditCookie edit_cookie, ITfContext* context
     return hr;
   }
 
+  ITfRange* inserted_range = nullptr;
   const HRESULT insert_hr = insert_at_selection->InsertTextAtSelection(
-      edit_cookie, 0, text.c_str(), static_cast<LONG>(text.size()), nullptr);
+      edit_cookie, 0, text.c_str(), static_cast<LONG>(text.size()),
+      &inserted_range);
   insert_at_selection->Release();
-  return insert_hr;
+  if (FAILED(insert_hr)) {
+    return insert_hr;
+  }
+
+  const HRESULT selection_hr =
+      MoveSelectionToRangeEnd(edit_cookie, context, inserted_range);
+  inserted_range->Release();
+  return selection_hr;
 }
 
 HRESULT TipTextService::StartComposition(TfEditCookie edit_cookie,
@@ -1311,8 +1342,7 @@ void TipTextService::RemoveInputModeLanguageBarItem() {
     input_mode_lang_bar_item_->RemoveFromLanguageBar(thread_mgr_);
   }
 
-  input_mode_lang_bar_item_->Release();
-  input_mode_lang_bar_item_ = nullptr;
+  SafeRelease(input_mode_lang_bar_item_);
 }
 
 HRESULT TipTextService::FlushPendingOperations(ITfContext* context,
@@ -1521,6 +1551,107 @@ void TipTextService::SetImeOpen(bool open) {
 #if defined(_DEBUG)
   debug::DebugLog(L"[MilkyWayIME][SetImeOpen][End] ime_open=" +
                   std::to_wstring(ime_open_ ? 1 : 0));
+#endif
+}
+
+const engine::layout::LayoutRegistry& TipTextService::layout_registry() const {
+  return layout_registry_;
+}
+
+const engine::layout::PhysicalLayoutId&
+TipTextService::current_physical_layout_id() const {
+  return session_.physical_layout_id();
+}
+
+const engine::layout::KoreanLayoutId&
+TipTextService::current_korean_layout_id() const {
+  return session_.korean_layout_id();
+}
+
+void TipTextService::SelectPhysicalLayoutFromLanguageBar(
+    const engine::layout::PhysicalLayoutId& physical_layout_id) {
+  if (layout_registry_.FindPhysicalLayout(physical_layout_id) == nullptr) {
+    return;
+  }
+
+  ApplyLayoutSelection(physical_layout_id, session_.korean_layout_id(),
+                       L"LanguageBarBaseLayout");
+}
+
+void TipTextService::SelectKoreanLayoutFromLanguageBar(
+    const engine::layout::KoreanLayoutId& korean_layout_id) {
+  if (layout_registry_.FindKoreanLayout(korean_layout_id) == nullptr) {
+    return;
+  }
+
+  ApplyLayoutSelection(session_.physical_layout_id(), korean_layout_id,
+                       L"LanguageBarKoreanLayout");
+}
+
+void TipTextService::SyncLayoutSelectionFromSettings(const wchar_t* origin) {
+  const settings::UserSettings user_settings =
+      settings::LoadUserSettings(layout_registry_);
+  if (user_settings.physical_layout_id == session_.physical_layout_id() &&
+      user_settings.korean_layout_id == session_.korean_layout_id()) {
+    return;
+  }
+
+#if defined(_DEBUG)
+  debug::DebugLog(
+      L"[MilkyWayIME][SyncLayoutSelectionFromSettings] origin=" +
+      std::wstring(origin != nullptr ? origin : L"<unknown>") + L" previous=" +
+      Utf8ToWide(session_.physical_layout_id()) + L"/" +
+      Utf8ToWide(session_.korean_layout_id()) + L" next=" +
+      Utf8ToWide(user_settings.physical_layout_id) + L"/" +
+      Utf8ToWide(user_settings.korean_layout_id));
+#endif
+  ApplyLayoutSelection(user_settings.physical_layout_id,
+                       user_settings.korean_layout_id, origin, false);
+}
+
+void TipTextService::ApplyLayoutSelection(
+    engine::layout::PhysicalLayoutId physical_layout_id,
+    engine::layout::KoreanLayoutId korean_layout_id,
+    const wchar_t* origin,
+    bool persist_settings) {
+  if (physical_layout_id == session_.physical_layout_id() &&
+      korean_layout_id == session_.korean_layout_id()) {
+    return;
+  }
+
+  ClearPendingKeyResult();
+  if (logic_.PrepareLayoutChange()) {
+    if (text_edit_sink_context_ != nullptr) {
+      const HRESULT flush_hr =
+          FlushPendingOperations(text_edit_sink_context_,
+                                 EditSessionRequestPolicy::kSyncPreferredWrite,
+                                 origin);
+      if (FAILED(flush_hr)) {
+        SyncCompositionTermination();
+      }
+    } else {
+      SyncCompositionTermination();
+    }
+  } else {
+    edit_sink_.ClearPendingOperations();
+  }
+
+  session_.SetLayouts(std::move(physical_layout_id), std::move(korean_layout_id));
+  if (!persist_settings) {
+    return;
+  }
+
+  const HRESULT save_hr = settings::SaveUserSettings(settings::UserSettings{
+      session_.physical_layout_id(), session_.korean_layout_id()});
+#if defined(_DEBUG)
+  if (FAILED(save_hr)) {
+    debug::DebugLog(L"[MilkyWayIME][ApplyLayoutSelection][SaveFailed] hr=0x" +
+                    FormatHex(static_cast<std::uint32_t>(save_hr)));
+  } else {
+    debug::DebugLog(L"[MilkyWayIME][ApplyLayoutSelection][Saved] physical=" +
+                    Utf8ToWide(session_.physical_layout_id()) + L" korean=" +
+                    Utf8ToWide(session_.korean_layout_id()));
+  }
 #endif
 }
 

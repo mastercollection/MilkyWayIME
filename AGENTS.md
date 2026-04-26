@@ -17,6 +17,7 @@ This document defines the working rules for agents operating in `D:\Git\MilkyWay
 - Interpret shortcuts from the input labels reported by Windows/TSF in both Korean and English input states, including `Ctrl`, `Alt`, `Win`, and `Shift`.
 - Support Hanja candidate selection from the currently composing Korean syllable when the Hanja key is invoked.
 - Keep the structure extensible so user-defined custom layouts can be supported later.
+- Keep user-facing layout settings reachable from the language bar menu; a full settings UI can remain a separate future project.
 
 ## Design Principles
 

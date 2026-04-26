@@ -367,7 +367,6 @@ int RunMatrix(const LayoutRegistry& registry, const Options& options) {
   ModifierState ctrl_alt;
   ctrl_alt.ctrl = true;
   ctrl_alt.alt = true;
-  PrintRow(registry, options, KeySpec{'O', ctrl_alt, false});
   PrintRow(registry, options, KeySpec{VK_SPACE, ctrl_alt, false});
 
   std::cout << "\nsequences\n";

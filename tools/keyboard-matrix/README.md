@@ -36,6 +36,7 @@ For Colemak-DH, `R` is expected to show `input_label_key=R`,
 observed VK, scan code, modifier state, input label, Hangul token, libhangul
 commit/preedit preview, category, and shortcut action. Press `Esc` to exit.
 
-The current shortcut resolver maps `Ctrl+Shift+Space` to `ToggleInputMode` and
-`Ctrl+Alt+O` to `OpenConfiguration`; shortcuts use the input label key, not the
-Hangul token key.
+The current shortcut resolver maps `Ctrl+Shift+Space` to `ToggleInputMode`;
+shortcuts use the input label key, not the Hangul token key. There is no
+`Ctrl+Alt+O` settings shortcut; settings are exposed through the language bar
+menu.

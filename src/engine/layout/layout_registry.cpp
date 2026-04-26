@@ -12,10 +12,6 @@ const std::vector<PhysicalLayout> kPhysicalLayouts = {
      PhysicalLayoutInterpretation::kEffectiveBaseLayout},
     {"colemak_dh", "Colemak-DH",
      PhysicalLayoutInterpretation::kEffectiveBaseLayout},
-#if defined(_DEBUG)
-    {"test_swapped_rp", "Test Effective Base Layout (Swap R/P)",
-     PhysicalLayoutInterpretation::kEffectiveBaseLayout},
-#endif
 };
 
 const std::vector<KoreanLayoutMapping> kKoreanLayouts = {
@@ -171,16 +167,12 @@ key::LayoutKey ResolveColemakDhLabelKey(key::LayoutKey token_key) {
       return key::LayoutKey::kE;
     case key::LayoutKey::kL:
       return key::LayoutKey::kI;
-    case key::LayoutKey::kOem1:
-      return key::LayoutKey::kO;
-    case key::LayoutKey::kZ:
-      return key::LayoutKey::kX;
-    case key::LayoutKey::kX:
-      return key::LayoutKey::kC;
-    case key::LayoutKey::kC:
+    case key::LayoutKey::kV:
       return key::LayoutKey::kD;
     case key::LayoutKey::kB:
-      return key::LayoutKey::kZ;
+      return key::LayoutKey::kV;
+    case key::LayoutKey::kOem1:
+      return key::LayoutKey::kO;
     case key::LayoutKey::kN:
       return key::LayoutKey::kK;
     case key::LayoutKey::kM:
@@ -245,17 +237,6 @@ key::LayoutKey LayoutRegistry::ResolveBaseLayoutLabelKey(
   if (physical_layout_id == "colemak_dh") {
     return ResolveColemakDhLabelKey(token_key);
   }
-
-#if defined(_DEBUG)
-  if (physical_layout_id == "test_swapped_rp") {
-    if (token_key == key::LayoutKey::kR) {
-      return key::LayoutKey::kP;
-    }
-    if (token_key == key::LayoutKey::kP) {
-      return key::LayoutKey::kR;
-    }
-  }
-#endif
 
   return token_key;
 }

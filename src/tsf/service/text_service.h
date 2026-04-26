@@ -48,6 +48,7 @@ class TextService {
                             const engine::state::ModifierState& modifiers,
                             engine::key::KeyTransition transition);
   bool PrepareImeModeToggle();
+  bool PrepareLayoutChange();
   bool OnFocusLost();
   bool OnSelectionMovedOutsideComposition();
   void OnCompositionTerminated();
@@ -63,7 +64,8 @@ class TextService {
       engine::key::KeyTransition transition) const;
   KeyEventResult HandleHangulAscii(const engine::key::KeyAnalysis& analysis);
   KeyEventResult HandleBackspace();
-  KeyEventResult HandleDelimiterOrUnhandled(KeyEventCategory category);
+  KeyEventResult HandleDelimiterOrUnhandled(
+      const engine::key::KeyAnalysis& analysis, KeyEventCategory category);
   KeyEventResult HandleModifiedShortcut(
       const engine::key::KeyAnalysis& analysis);
   bool EndActiveComposition(engine::session::CompositionEndReason reason);
