@@ -183,6 +183,11 @@ void LoadUserBaseLayouts(engine::layout::LayoutRegistry* layout_registry) {
     return;
   }
 
+#if defined(_DEBUG)
+  debug::DebugLog(L"[MilkyWayIME][LayoutLoader][Base][Begin] dir=" +
+                  directory.wstring());
+#endif
+
   engine::layout::BaseLayoutDirectoryLoadResult result;
   try {
     result = engine::layout::LoadBaseLayoutDirectory(directory);
@@ -194,22 +199,32 @@ void LoadUserBaseLayouts(engine::layout::LayoutRegistry* layout_registry) {
     return;
   }
 #if defined(_DEBUG)
+  std::size_t error_count = 0;
   for (const std::string& error : result.errors) {
+    ++error_count;
     debug::DebugLog(L"[MilkyWayIME][LayoutLoader][Base][Error] " +
                     Utf8ToWide(error));
   }
 #endif
 
+  std::size_t loaded_count = 0;
+  std::size_t override_count = 0;
+  std::size_t skipped_count = 0;
   for (auto definition : result.definitions) {
     const std::string id = definition.layout.id;
     const bool overrides_existing =
         layout_registry->FindBaseLayout(id) != nullptr;
     if (!layout_registry->AddBaseLayout(std::move(definition))) {
+      ++skipped_count;
 #if defined(_DEBUG)
       debug::DebugLog(L"[MilkyWayIME][LayoutLoader][Base][Skipped] id=" +
                       Utf8ToWide(id));
 #endif
       continue;
+    }
+    ++loaded_count;
+    if (overrides_existing) {
+      ++override_count;
     }
 #if defined(_DEBUG)
     debug::DebugLog(
@@ -219,6 +234,14 @@ void LoadUserBaseLayouts(engine::layout::LayoutRegistry* layout_registry) {
         Utf8ToWide(id));
 #endif
   }
+
+#if defined(_DEBUG)
+  debug::DebugLog(L"[MilkyWayIME][LayoutLoader][Base][End] loaded=" +
+                  std::to_wstring(loaded_count) + L" overrides=" +
+                  std::to_wstring(override_count) + L" errors=" +
+                  std::to_wstring(error_count) + L" skipped=" +
+                  std::to_wstring(skipped_count));
+#endif
 }
 
 const wchar_t* EditSessionRequestPolicyName(EditSessionRequestPolicy policy) {
@@ -291,6 +314,11 @@ TipTextService::TipTextService()
   const settings::SettingsStore settings_store;
   const settings::UserSettings user_settings =
       settings::ResolveUserSettings(settings_store.Load(), layout_registry_);
+#if defined(_DEBUG)
+  debug::DebugLog(L"[MilkyWayIME][LayoutSelection][Initial] base=" +
+                  Utf8ToWide(user_settings.base_layout_id) + L" korean=" +
+                  Utf8ToWide(user_settings.korean_layout_id));
+#endif
   std::unique_ptr<adapters::libhangul::HangulComposer> composer =
       CreateComposerForKoreanLayout(layout_registry_,
                                     user_settings.korean_layout_id);
