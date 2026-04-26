@@ -7,6 +7,7 @@
 #include <optional>
 #include <sstream>
 #include <string_view>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -24,6 +25,7 @@
 #include "engine/session/input_session.h"
 #include "engine/shortcut/shortcut_resolver.h"
 #include "engine/state/modifier_state.h"
+#include "hangul.h"
 #include "tsf/edit/text_edit_sink.h"
 #include "tsf/edit/text_edit_plan.h"
 #include "tsf/service/text_service.h"
@@ -64,6 +66,14 @@ std::string ReadTextFile(const char* path) {
   return buffer.str();
 }
 
+std::filesystem::path SourceHanjaDirectory() {
+  std::filesystem::path source_file = std::filesystem::path(__FILE__);
+  for (int i = 0; i < 3; ++i) {
+    source_file = source_file.parent_path();
+  }
+  return source_file / "external" / "libhangul" / "data" / "hanja";
+}
+
 void AssertOperation(const TextEditOperation& operation,
                      TextEditOperationType type, std::string_view text) {
   assert(operation.type == type);
@@ -86,7 +96,7 @@ void TestInputSession() {
   assert(hanja_request.has_value());
   assert(hanja_request->query_text == "\xED\x95\x9C");
   assert(hanja_request->kind ==
-         milkyway::engine::hanja::CandidateKind::kHanja);
+         milkyway::engine::hanja::CandidateKind::kHanjaForward);
 
   session.UpdateComposition("\xE3\x85\x81");
   const auto symbol_request = session.RequestHanjaConversion();
@@ -119,13 +129,52 @@ bool ContainsCandidateValue(
                      });
 }
 
+bool ContainsCandidateKey(
+    const std::vector<milkyway::engine::hanja::Candidate>& candidates,
+    std::string_view key) {
+  return std::any_of(candidates.begin(), candidates.end(),
+                     [key](const milkyway::engine::hanja::Candidate& item) {
+                       return item.key == key;
+                     });
+}
+
+bool HanjaListContainsValue(HanjaList* list, std::string_view value) {
+  if (list == nullptr) {
+    return false;
+  }
+
+  const int size = hanja_list_get_size(list);
+  for (int index = 0; index < size; ++index) {
+    const char* item =
+        hanja_list_get_nth_value(list, static_cast<unsigned int>(index));
+    if (item != nullptr && std::string_view(item) == value) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void AssertHanjaExactValue(HanjaTable* table, const char* key,
+                           std::string_view value) {
+  HanjaList* list = hanja_table_match_exact(table, key);
+  assert(HanjaListContainsValue(list, value));
+  hanja_list_delete(list);
+}
+
+void AssertHanjaReverseValue(HanjaTable* table, const char* value,
+                             std::string_view key) {
+  HanjaList* list = hanja_table_match_exact_value(table, value);
+  assert(HanjaListContainsValue(list, key));
+  hanja_list_delete(list);
+}
+
 void TestHanjaCandidateRequestValidation() {
   using milkyway::engine::hanja::CandidateKind;
   using milkyway::engine::hanja::CreateCandidateRequestFromPreedit;
 
   const auto hanja = CreateCandidateRequestFromPreedit("\xED\x95\x9C");
   assert(hanja.has_value());
-  assert(hanja->kind == CandidateKind::kHanja);
+  assert(hanja->kind == CandidateKind::kHanjaForward);
 
   const auto symbol = CreateCandidateRequestFromPreedit("\xE3\x85\x81");
   assert(symbol.has_value());
@@ -138,16 +187,141 @@ void TestHanjaCandidateRequestValidation() {
   assert(!CreateCandidateRequestFromPreedit("\xE3\x85").has_value());
 }
 
+void TestSelectionHanjaPrefixRequests() {
+  using milkyway::engine::hanja::CandidateKind;
+  using milkyway::engine::hanja::CreateSelectionHanjaPrefixRequests;
+  using milkyway::engine::hanja::CreateSelectionHanjaReversePrefixRequests;
+
+  const auto korea =
+      CreateSelectionHanjaPrefixRequests("\xED\x95\x9C\xEA\xB5\xAD");
+  assert(korea.size() == 2);
+  assert(korea[0].request.query_text == "\xED\x95\x9C\xEA\xB5\xAD");
+  assert(korea[0].request.kind == CandidateKind::kHanjaForward);
+  assert(korea[0].matched_byte_length == 6);
+  assert(korea[0].matched_utf16_length == 2);
+  assert(korea[1].request.query_text == "\xED\x95\x9C");
+  assert(korea[1].matched_byte_length == 3);
+  assert(korea[1].matched_utf16_length == 1);
+
+  const auto korea_sentence = CreateSelectionHanjaPrefixRequests(
+      "\xED\x95\x9C\xEA\xB5\xAD\xEC\x9E\x85\xEB\x8B\x88\xEB\x8B\xA4");
+  assert(korea_sentence.size() == 5);
+  assert(korea_sentence[3].request.query_text ==
+         "\xED\x95\x9C\xEA\xB5\xAD");
+  assert(korea_sentence[3].matched_utf16_length == 2);
+
+  const auto han = CreateSelectionHanjaPrefixRequests("\xED\x95\x9C");
+  assert(han.size() == 1);
+  assert(han[0].request.query_text == "\xED\x95\x9C");
+  assert(han[0].matched_utf16_length == 1);
+
+  const auto polite_sentence = CreateSelectionHanjaPrefixRequests(
+      "\xEC\xA0\x80\xEB\x8A\x94 "
+      "\xED\x95\x9C\xEA\xB5\xAD\xEC\x9E\x85\xEB\x8B\x88\xEB\x8B\xA4");
+  assert(polite_sentence.size() == 2);
+  assert(polite_sentence[0].request.query_text ==
+         "\xEC\xA0\x80\xEB\x8A\x94");
+  assert(polite_sentence[1].request.query_text == "\xEC\xA0\x80");
+
+  const auto annyeong = CreateSelectionHanjaReversePrefixRequests(
+      "\xE5\xAE\x89\xE5\xAF\xA7\xED\x95\x98\xEC\x84\xB8\xEC\x9A\x94");
+  assert(annyeong.size() == 2);
+  assert(annyeong[0].request.query_text == "\xE5\xAE\x89\xE5\xAF\xA7");
+  assert(annyeong[0].request.kind == CandidateKind::kHanjaReverse);
+  assert(annyeong[0].matched_byte_length == 6);
+  assert(annyeong[0].matched_utf16_length == 2);
+  assert(annyeong[1].request.query_text == "\xE5\xAE\x89");
+  assert(annyeong[1].matched_utf16_length == 1);
+
+  assert(CreateSelectionHanjaPrefixRequests("").empty());
+  assert(CreateSelectionHanjaPrefixRequests("A").empty());
+  assert(CreateSelectionHanjaPrefixRequests("\xE3\x85\x81").empty());
+  assert(CreateSelectionHanjaReversePrefixRequests("").empty());
+  assert(CreateSelectionHanjaReversePrefixRequests("A").empty());
+  assert(CreateSelectionHanjaReversePrefixRequests("\xED\x95\x9C").empty());
+}
+
+void TestLibhangulHanjaBinaryCache() {
+  const milkyway::adapters::dictionary::HanjaDictionaryPaths paths =
+      milkyway::adapters::dictionary::DefaultHanjaDictionaryPaths();
+  const std::string hanja_path = (SourceHanjaDirectory() / "hanja.txt").string();
+  std::error_code error_code;
+  const std::filesystem::path binary_path =
+      std::filesystem::temp_directory_path(error_code) /
+      "milkyway-hanja-test-cache-unit.bin";
+  assert(!error_code);
+  std::filesystem::remove(binary_path, error_code);
+  error_code.clear();
+  const std::string binary_path_text = binary_path.string();
+
+  HanjaTable* txt_table = hanja_table_load(hanja_path.c_str());
+  assert(txt_table != nullptr);
+  AssertHanjaExactValue(txt_table, "\xED\x95\x9C", "\xE9\x9F\x93");
+  AssertHanjaExactValue(txt_table, "\xED\x95\x9C\xEA\xB5\xAD",
+                        "\xE9\x9F\x93\xE5\x9C\x8B");
+  AssertHanjaExactValue(txt_table, "\xED\x8F\xAD\xEB\xA0\xAC",
+                        "\xE7\x88\x86\xE8\xA3\x82");
+  AssertHanjaExactValue(txt_table, "\xEC\xB2\x9C\xEC\x82\xAC",
+                        "\xE5\xA4\xA9\xE4\xBD\xBF");
+  AssertHanjaReverseValue(txt_table, "\xE5\xAE\x89\xE5\xAF\xA7",
+                          "\xEC\x95\x88\xEB\x85\x95");
+  AssertHanjaReverseValue(txt_table, "\xE7\x88\x86\xE8\xA3\x82",
+                          "\xED\x8F\xAD\xEB\xA0\xAC");
+  AssertHanjaReverseValue(txt_table, "\xE5\xA4\xA9\xE4\xBD\xBF",
+                          "\xEC\xB2\x9C\xEC\x82\xAC");
+  assert(hanja_table_save_binary(txt_table, binary_path_text.c_str(),
+                                 hanja_path.c_str()));
+
+  HanjaTable* binary_table =
+      hanja_table_load_binary(binary_path_text.c_str(), nullptr);
+  assert(binary_table != nullptr);
+  AssertHanjaExactValue(binary_table, "\xED\x95\x9C", "\xE9\x9F\x93");
+  AssertHanjaExactValue(binary_table, "\xED\x95\x9C\xEA\xB5\xAD",
+                        "\xE9\x9F\x93\xE5\x9C\x8B");
+  AssertHanjaExactValue(binary_table, "\xED\x8F\xAD\xEB\xA0\xAC",
+                        "\xE7\x88\x86\xE8\xA3\x82");
+  AssertHanjaExactValue(binary_table, "\xEC\xB2\x9C\xEC\x82\xAC",
+                        "\xE5\xA4\xA9\xE4\xBD\xBF");
+
+  const std::string symbol_binary_path = paths.symbol_binary_path.string();
+  HanjaTable* symbol_binary_table =
+      hanja_table_load_binary(symbol_binary_path.c_str(), nullptr);
+  assert(symbol_binary_table != nullptr);
+  AssertHanjaExactValue(symbol_binary_table, "\xE3\x85\x81", "\xE2\x80\xBB");
+
+  hanja_table_delete(symbol_binary_table);
+  hanja_table_delete(binary_table);
+  hanja_table_delete(txt_table);
+  std::filesystem::remove(binary_path, error_code);
+}
+
 void TestLibhangulHanjaDictionary() {
   using milkyway::adapters::dictionary::LibhangulHanjaDictionary;
+  using milkyway::engine::hanja::CaretHanjaRun;
   using milkyway::engine::hanja::CandidateKind;
   using milkyway::engine::hanja::CandidateRequest;
+  using milkyway::engine::hanja::CreateCaretHanjaRun;
+  using milkyway::engine::hanja::CreateSelectionHanjaPrefixRequests;
+  using milkyway::engine::hanja::CreateSelectionHanjaReversePrefixRequests;
+  using milkyway::engine::hanja::SelectionHanjaPrefixRequest;
+
+  struct ResolvedSelectionTarget {
+    SelectionHanjaPrefixRequest request;
+    std::vector<milkyway::engine::hanja::Candidate> candidates;
+  };
+
+  struct ResolvedCaretSegment {
+    SelectionHanjaPrefixRequest request;
+    std::size_t start_utf16_offset = 0;
+    std::vector<milkyway::engine::hanja::Candidate> candidates;
+  };
 
   LibhangulHanjaDictionary dictionary;
   dictionary.Preload();
 
   const auto hanja_candidates =
-      dictionary.Lookup(CandidateRequest{"\xED\x95\x9C", CandidateKind::kHanja});
+      dictionary.Lookup(
+          CandidateRequest{"\xED\x95\x9C", CandidateKind::kHanjaForward});
   assert(!hanja_candidates.empty());
   assert(ContainsCandidateValue(hanja_candidates, "\xE9\x9F\x93"));
 
@@ -155,6 +329,173 @@ void TestLibhangulHanjaDictionary() {
       CandidateRequest{"\xE3\x85\x81", CandidateKind::kSymbol});
   assert(!symbol_candidates.empty());
   assert(ContainsCandidateValue(symbol_candidates, "\xE2\x80\xBB"));
+
+  const auto reverse_annyeong = dictionary.Lookup(
+      CandidateRequest{"\xE5\xAE\x89\xE5\xAF\xA7",
+                       CandidateKind::kHanjaReverse});
+  assert(!reverse_annyeong.empty());
+  assert(ContainsCandidateValue(reverse_annyeong,
+                                "\xEC\x95\x88\xEB\x85\x95"));
+  assert(ContainsCandidateKey(reverse_annyeong, "\xE5\xAE\x89\xE5\xAF\xA7"));
+
+  const auto reverse_pokryeol = dictionary.Lookup(
+      CandidateRequest{"\xE7\x88\x86\xE8\xA3\x82",
+                       CandidateKind::kHanjaReverse});
+  assert(!reverse_pokryeol.empty());
+  assert(ContainsCandidateValue(reverse_pokryeol,
+                                "\xED\x8F\xAD\xEB\xA0\xAC"));
+
+  const auto reverse_cheonsa = dictionary.Lookup(
+      CandidateRequest{"\xE5\xA4\xA9\xE4\xBD\xBF",
+                       CandidateKind::kHanjaReverse});
+  assert(!reverse_cheonsa.empty());
+  assert(ContainsCandidateValue(reverse_cheonsa,
+                                "\xEC\xB2\x9C\xEC\x82\xAC"));
+
+  const auto resolve_selection_target =
+      [&dictionary](std::string_view selected_text)
+      -> std::optional<ResolvedSelectionTarget> {
+    std::vector<SelectionHanjaPrefixRequest> requests =
+        CreateSelectionHanjaPrefixRequests(selected_text);
+    if (requests.empty()) {
+      requests = CreateSelectionHanjaReversePrefixRequests(selected_text);
+    }
+    for (const SelectionHanjaPrefixRequest& request : requests) {
+      std::vector<milkyway::engine::hanja::Candidate> candidates =
+          dictionary.Lookup(request.request);
+      if (!candidates.empty()) {
+        return ResolvedSelectionTarget{request, std::move(candidates)};
+      }
+    }
+    return std::nullopt;
+  };
+
+  const auto korea_target =
+      resolve_selection_target("\xED\x95\x9C\xEA\xB5\xAD");
+  assert(korea_target.has_value());
+  assert(korea_target->request.request.query_text ==
+         "\xED\x95\x9C\xEA\xB5\xAD");
+  assert(korea_target->request.matched_utf16_length == 2);
+  assert(ContainsCandidateValue(korea_target->candidates,
+                                "\xE9\x9F\x93\xE5\x9C\x8B"));
+
+  const auto korea_sentence_target = resolve_selection_target(
+      "\xED\x95\x9C\xEA\xB5\xAD\xEC\x9E\x85\xEB\x8B\x88\xEB\x8B\xA4");
+  assert(korea_sentence_target.has_value());
+  assert(korea_sentence_target->request.request.query_text ==
+         "\xED\x95\x9C\xEA\xB5\xAD");
+  assert(korea_sentence_target->request.matched_utf16_length == 2);
+
+  const auto han_target = resolve_selection_target("\xED\x95\x9C");
+  assert(han_target.has_value());
+  assert(han_target->request.request.query_text == "\xED\x95\x9C");
+  assert(han_target->request.matched_utf16_length == 1);
+  assert(ContainsCandidateValue(han_target->candidates, "\xE9\x9F\x93"));
+
+  const auto annyeong_target = resolve_selection_target(
+      "\xE5\xAE\x89\xE5\xAF\xA7\xED\x95\x98\xEC\x84\xB8\xEC\x9A\x94");
+  assert(annyeong_target.has_value());
+  assert(annyeong_target->request.request.query_text ==
+         "\xE5\xAE\x89\xE5\xAF\xA7");
+  assert(annyeong_target->request.request.kind == CandidateKind::kHanjaReverse);
+  assert(annyeong_target->request.matched_utf16_length == 2);
+  assert(ContainsCandidateValue(annyeong_target->candidates,
+                                "\xEC\x95\x88\xEB\x85\x95"));
+
+  const auto polite_reverse_target = resolve_selection_target(
+      "\xEC\xA0\x80\xEB\x8A\x94 "
+      "\xE5\xAE\x89\xE5\xAF\xA7\xED\x95\x98\xEC\x84\xB8\xEC\x9A\x94");
+  assert(polite_reverse_target.has_value());
+  assert(polite_reverse_target->request.request.query_text == "\xEC\xA0\x80");
+  assert(polite_reverse_target->request.request.kind ==
+         CandidateKind::kHanjaForward);
+
+  const auto resolve_caret_segments =
+      [&dictionary](const CaretHanjaRun& run) {
+    std::vector<ResolvedCaretSegment> segments;
+    std::size_t byte_offset = 0;
+    std::size_t utf16_offset = 0;
+    while (byte_offset < run.text.size()) {
+      const std::string_view remaining(run.text.data() + byte_offset,
+                                       run.text.size() - byte_offset);
+      std::vector<SelectionHanjaPrefixRequest> requests =
+          run.kind == CandidateKind::kHanjaReverse
+              ? CreateSelectionHanjaReversePrefixRequests(remaining)
+              : CreateSelectionHanjaPrefixRequests(remaining);
+      bool resolved = false;
+      for (const SelectionHanjaPrefixRequest& request : requests) {
+        std::vector<milkyway::engine::hanja::Candidate> candidates =
+            dictionary.Lookup(request.request);
+        if (candidates.empty()) {
+          continue;
+        }
+        segments.push_back(ResolvedCaretSegment{
+            request, utf16_offset, std::move(candidates)});
+        byte_offset += request.matched_byte_length;
+        utf16_offset += request.matched_utf16_length;
+        resolved = true;
+        break;
+      }
+      if (!resolved) {
+        break;
+      }
+    }
+    return segments;
+  };
+
+  const auto pokryeol_cheonsa = CreateCaretHanjaRun(
+      "\xED\x8F\xAD\xEB\xA0\xAC\xEC\xB2\x9C\xEC\x82\xAC");
+  assert(pokryeol_cheonsa.has_value());
+  assert(pokryeol_cheonsa->text ==
+         "\xED\x8F\xAD\xEB\xA0\xAC\xEC\xB2\x9C\xEC\x82\xAC");
+  assert(pokryeol_cheonsa->kind == CandidateKind::kHanjaForward);
+  assert(pokryeol_cheonsa->utf16_length == 4);
+  const auto forward_segments = resolve_caret_segments(*pokryeol_cheonsa);
+  assert(forward_segments.size() == 2);
+  assert(forward_segments[0].request.request.query_text ==
+         "\xED\x8F\xAD\xEB\xA0\xAC");
+  assert(forward_segments[0].start_utf16_offset == 0);
+  assert(ContainsCandidateValue(forward_segments[0].candidates,
+                                "\xE7\x88\x86\xE8\xA3\x82"));
+  assert(forward_segments[1].request.request.query_text ==
+         "\xEC\xB2\x9C\xEC\x82\xAC");
+  assert(forward_segments[1].start_utf16_offset == 2);
+  assert(ContainsCandidateValue(forward_segments[1].candidates,
+                                "\xE5\xA4\xA9\xE4\xBD\xBF"));
+
+  const auto hanja_cheonsa = CreateCaretHanjaRun(
+      "\xE7\x88\x86\xE8\xA3\x82\xE5\xA4\xA9\xE4\xBD\xBF");
+  assert(hanja_cheonsa.has_value());
+  assert(hanja_cheonsa->kind == CandidateKind::kHanjaReverse);
+  assert(hanja_cheonsa->utf16_length == 4);
+  const auto reverse_segments = resolve_caret_segments(*hanja_cheonsa);
+  assert(reverse_segments.size() == 2);
+  assert(reverse_segments[0].request.request.query_text ==
+         "\xE7\x88\x86\xE8\xA3\x82");
+  assert(ContainsCandidateValue(reverse_segments[0].candidates,
+                                "\xED\x8F\xAD\xEB\xA0\xAC"));
+  assert(reverse_segments[1].request.request.query_text ==
+         "\xE5\xA4\xA9\xE4\xBD\xBF");
+  assert(ContainsCandidateValue(reverse_segments[1].candidates,
+                                "\xEC\xB2\x9C\xEC\x82\xAC"));
+
+  const auto sentence_run = CreateCaretHanjaRun(
+      "\xED\x8F\xAD\xEB\xA0\xAC\xEC\xB2\x9C\xEC\x82\xAC\xEB\xA5\xBC "
+      "\xEB\xB4\xA4\xEB\x8B\xA4");
+  assert(sentence_run.has_value());
+  assert(sentence_run->text == "\xEB\xB4\xA4\xEB\x8B\xA4");
+  assert(sentence_run->utf16_length == 2);
+
+  assert(!resolve_selection_target("").has_value());
+  assert(!resolve_selection_target("A").has_value());
+  assert(!resolve_selection_target("\xE3\x85\x81").has_value());
+  const auto polite_forward_target = resolve_selection_target(
+      "\xEC\xA0\x80\xEB\x8A\x94 "
+      "\xED\x95\x9C\xEA\xB5\xAD\xEC\x9E\x85\xEB\x8B\x88\xEB\x8B\xA4");
+  assert(polite_forward_target.has_value());
+  assert(polite_forward_target->request.request.query_text == "\xEC\xA0\x80");
+  assert(polite_forward_target->request.request.kind ==
+         CandidateKind::kHanjaForward);
 }
 
 void TestLibhangulComposer() {
@@ -1400,10 +1741,13 @@ int main() {
 
   TestInputSession();
   TestHanjaCandidateRequestValidation();
+  TestSelectionHanjaPrefixRequests();
+  TestLibhangulHanjaBinaryCache();
   TestLibhangulHanjaDictionary();
   TestLibhangulComposer();
   TestLibhangulComposerAutoReorder();
   TestLibhangulComposerShiftFinalSsangSios();
+  TestLibhangulComposerShinsebeol();
   TestShortcutResolver(registry);
   TestLayoutRegistryEffectiveBaseLayout(registry);
   TestBuiltInKoreanLayouts(registry);
@@ -1418,6 +1762,7 @@ int main() {
   TestTextServicePrepareImeModeToggle(registry);
   TestTextServiceShortcutAndTermination(registry);
   TestTextServiceReplaceComposerForKoreanLayout(registry);
+  TestTextServiceShinsebeolLayout(registry);
   TestTextServiceShiftFinalSsangSios(registry);
   TestTextServiceShiftDoubleVowels(registry);
   TestTextEditPlanPreservesReorderedSyllableCommit();

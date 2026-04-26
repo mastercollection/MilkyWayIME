@@ -54,16 +54,30 @@ if errorlevel 1 (
     exit /b 1
 )
 
-copy /y "%SOURCE_HANJA_DIR%\hanja.txt" "%INSTALL_HANJA_DIR%\hanja.txt" >nul
+if not exist "%SOURCE_HANJA_DIR%\hanja.bin" (
+    echo [ERROR] Required Hanja binary cache not found:
+    echo %SOURCE_HANJA_DIR%\hanja.bin
+    echo Run tools\generate-hanja-cache.cmd first.
+    exit /b 1
+)
+
+if not exist "%SOURCE_HANJA_DIR%\mssymbol.bin" (
+    echo [ERROR] Required symbol binary cache not found:
+    echo %SOURCE_HANJA_DIR%\mssymbol.bin
+    echo Run tools\generate-hanja-cache.cmd first.
+    exit /b 1
+)
+
+copy /y "%SOURCE_HANJA_DIR%\hanja.bin" "%INSTALL_HANJA_DIR%\hanja.bin" >nul
 if errorlevel 1 (
-    echo [ERROR] Failed to copy hanja.txt to:
+    echo [ERROR] Failed to copy hanja.bin to:
     echo %INSTALL_HANJA_DIR%
     exit /b 1
 )
 
-copy /y "%SOURCE_HANJA_DIR%\mssymbol.txt" "%INSTALL_HANJA_DIR%\mssymbol.txt" >nul
+copy /y "%SOURCE_HANJA_DIR%\mssymbol.bin" "%INSTALL_HANJA_DIR%\mssymbol.bin" >nul
 if errorlevel 1 (
-    echo [ERROR] Failed to copy mssymbol.txt to:
+    echo [ERROR] Failed to copy mssymbol.bin to:
     echo %INSTALL_HANJA_DIR%
     exit /b 1
 )

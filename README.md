@@ -176,9 +176,16 @@ Run both scripts from an elevated Command Prompt.
 
 The registration script copies `build\MilkyWayIME.Tsf\x64\Debug\mwime_tsf.dll` to
 `%ProgramW6432%\MilkyWayIME\mwime_tsf.dll`, registers that installed copy
-through `regsvr32`, copies `hanja.txt` and `mssymbol.txt` into
+through `regsvr32`, copies required `hanja.bin` and `mssymbol.bin` into
 `%ProgramW6432%\MilkyWayIME\data\hanja`, and restarts `ctfmon.exe` so the TSF
-profile refreshes.
+profile refreshes. Runtime Hanja lookup loads the binary cache only; text
+sources are used to regenerate the binary cache during development.
+
+Regenerate the source-tree Hanja binary caches with:
+
+```cmd
+tools\generate-hanja-cache.cmd
+```
 
 The unregister script defaults to `%ProgramW6432%\MilkyWayIME\mwime_tsf.dll`
 and calls the DLL's `DllUnregisterServer` export through `regsvr32`.
@@ -204,13 +211,19 @@ Use the current build only as a developer smoke test target.
      the target app honors TSF display attributes.
    - `한` followed by the Hanja key opens Hanja candidates, number keys or
      `Enter` commit the selected candidate, and `Esc` keeps the composing text.
+   - A selected Hangul prefix opens Hanja candidates; a selected Hanja prefix
+     opens Hangul reverse-conversion candidates.
+   - With no selection or composition, the Hanja key converts the Hangul or Hanja
+     run immediately before the caret, and repeated Hanja key presses cycle
+     through dictionary-resolved segments without committing the current
+     candidate.
    - `ㅁ` followed by the Hanja key opens symbol candidates including `※`.
    - Candidate colors follow the Windows app light/dark theme and high contrast
      system colors.
 
-This stage still does not include a user-facing installer or Hanja conversion
-for Shift-selected already committed text. Candidate lookup intentionally uses
-exact one-character lookup only; word-level conversion remains out of scope.
+This stage still does not include a user-facing installer. Candidate lookup is
+exact dictionary lookup over the selected prefix or caret run segment; morphology,
+particle splitting, and selection-internal searching remain out of scope.
 
 ## Test Execution
 

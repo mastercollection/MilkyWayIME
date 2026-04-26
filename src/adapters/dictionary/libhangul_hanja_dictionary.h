@@ -2,7 +2,6 @@
 
 #include <filesystem>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 #include "engine/hanja/candidate_request.h"
@@ -10,14 +9,16 @@
 namespace milkyway::adapters::dictionary {
 
 struct HanjaDictionaryPaths {
-  std::filesystem::path hanja_path;
-  std::filesystem::path symbol_path;
+  std::filesystem::path hanja_binary_path;
+  std::filesystem::path symbol_binary_path;
 };
 
 HanjaDictionaryPaths DefaultHanjaDictionaryPaths();
 
 class LibhangulHanjaDictionary {
  public:
+  struct SharedState;
+
   explicit LibhangulHanjaDictionary(
       HanjaDictionaryPaths paths = DefaultHanjaDictionaryPaths());
   ~LibhangulHanjaDictionary();
@@ -30,14 +31,8 @@ class LibhangulHanjaDictionary {
   void Preload();
 
  private:
-  struct HanjaTableHandle;
-
-  HanjaTableHandle* TableForKind(engine::hanja::CandidateKind kind);
-
   HanjaDictionaryPaths paths_;
-  HanjaTableHandle* hanja_table_ = nullptr;
-  HanjaTableHandle* symbol_table_ = nullptr;
-  std::unordered_map<std::string, std::vector<engine::hanja::Candidate>> cache_;
+  SharedState* state_ = nullptr;
 };
 
 }  // namespace milkyway::adapters::dictionary

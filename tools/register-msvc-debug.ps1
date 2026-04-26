@@ -27,12 +27,16 @@ $installedHanjaDir = Join-Path $InstallDir "data\hanja"
 New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
 Copy-Item -LiteralPath $resolvedDll.Path -Destination $installedDll -Force
 New-Item -ItemType Directory -Path $installedHanjaDir -Force | Out-Null
-Copy-Item -LiteralPath (Join-Path $sourceHanjaDir "hanja.txt") `
-    -Destination (Join-Path $installedHanjaDir "hanja.txt") `
-    -Force
-Copy-Item -LiteralPath (Join-Path $sourceHanjaDir "mssymbol.txt") `
-    -Destination (Join-Path $installedHanjaDir "mssymbol.txt") `
-    -Force
+
+foreach ($name in @("hanja.bin", "mssymbol.bin")) {
+    $source = Join-Path $sourceHanjaDir $name
+    if (-not (Test-Path -LiteralPath $source)) {
+        throw "Required Hanja binary cache not found: $source. Run tools\generate-hanja-cache.cmd first."
+    }
+    Copy-Item -LiteralPath $source `
+        -Destination (Join-Path $installedHanjaDir $name) `
+        -Force
+}
 
 $process = Start-Process -FilePath $regsvr32 `
     -ArgumentList @("/s", $installedDll) `

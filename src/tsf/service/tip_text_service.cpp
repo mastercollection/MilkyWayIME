@@ -86,20 +86,8 @@ constexpr GUID kImeModePreservedKeyGuid = {
 constexpr wchar_t kImeModePreservedKeyDescription[] =
     L"MilkyWayIME Hangul toggle";
 
-class TextExtentEditSession final : public ITfEditSession {
+class EditSessionBase : public ITfEditSession {
  public:
-  TextExtentEditSession(ITfContextView* view, ITfRange* range,
-                        std::optional<RECT>* text_rect)
-      : view_(view), range_(range), text_rect_(text_rect) {
-    view_->AddRef();
-    range_->AddRef();
-  }
-
-  ~TextExtentEditSession() {
-    range_->Release();
-    view_->Release();
-  }
-
   STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override {
     if (ppv == nullptr) {
       return E_INVALIDARG;
@@ -127,6 +115,27 @@ class TextExtentEditSession final : public ITfEditSession {
     return value;
   }
 
+ protected:
+  virtual ~EditSessionBase() = default;
+
+ private:
+  std::atomic<ULONG> ref_count_{1};
+};
+
+class TextExtentEditSession final : public EditSessionBase {
+ public:
+  TextExtentEditSession(ITfContextView* view, ITfRange* range,
+                        std::optional<RECT>* text_rect)
+      : view_(view), range_(range), text_rect_(text_rect) {
+    view_->AddRef();
+    range_->AddRef();
+  }
+
+  ~TextExtentEditSession() override {
+    range_->Release();
+    view_->Release();
+  }
+
   STDMETHODIMP DoEditSession(TfEditCookie edit_cookie) override {
     RECT rect = {};
     BOOL clipped = FALSE;
@@ -138,9 +147,419 @@ class TextExtentEditSession final : public ITfEditSession {
   }
 
  private:
-  std::atomic<ULONG> ref_count_{1};
   ITfContextView* view_ = nullptr;
   ITfRange* range_ = nullptr;
+  std::optional<RECT>* text_rect_ = nullptr;
+};
+
+HRESULT SetContextSelectionToRangeEnd(TfEditCookie edit_cookie,
+                                      ITfContext* context, ITfRange* range) {
+  if (context == nullptr || range == nullptr) {
+    return E_INVALIDARG;
+  }
+
+  ITfRange* selection_range = nullptr;
+  HRESULT hr = range->Clone(&selection_range);
+  if (FAILED(hr)) {
+    return hr;
+  }
+
+  hr = selection_range->Collapse(edit_cookie, TF_ANCHOR_END);
+  if (SUCCEEDED(hr)) {
+    TF_SELECTION selection = {};
+    selection.range = selection_range;
+    selection.style.ase = TF_AE_NONE;
+    selection.style.fInterimChar = FALSE;
+    hr = context->SetSelection(edit_cookie, 1, &selection);
+  }
+
+  selection_range->Release();
+  return hr;
+}
+
+struct SelectionTextSnapshot {
+  SelectionTextSnapshot() = default;
+  SelectionTextSnapshot(const SelectionTextSnapshot&) = delete;
+  SelectionTextSnapshot& operator=(const SelectionTextSnapshot&) = delete;
+
+  ~SelectionTextSnapshot() {
+    SafeRelease(range);
+  }
+
+  std::wstring text;
+  ITfRange* range = nullptr;
+  bool is_empty = true;
+  bool has_selection = false;
+};
+
+class SelectionTextReadEditSession final : public EditSessionBase {
+ public:
+  SelectionTextReadEditSession(ITfContext* context,
+                               SelectionTextSnapshot* snapshot)
+      : context_(context), snapshot_(snapshot) {
+    context_->AddRef();
+  }
+
+  ~SelectionTextReadEditSession() override {
+    context_->Release();
+  }
+
+  STDMETHODIMP DoEditSession(TfEditCookie edit_cookie) override {
+    if (snapshot_ == nullptr) {
+      return E_INVALIDARG;
+    }
+
+    snapshot_->text.clear();
+    SafeRelease(snapshot_->range);
+
+    TF_SELECTION selection = {};
+    ULONG fetched = 0;
+    HRESULT hr = context_->GetSelection(edit_cookie, 0, 1, &selection, &fetched);
+    if (FAILED(hr) || fetched == 0 || selection.range == nullptr) {
+      return S_OK;
+    }
+    snapshot_->has_selection = true;
+
+    BOOL empty = TRUE;
+    hr = selection.range->IsEmpty(edit_cookie, &empty);
+    snapshot_->is_empty = empty != FALSE;
+    if (FAILED(hr) || empty) {
+      selection.range->Release();
+      return S_OK;
+    }
+
+    std::array<WCHAR, 256> buffer = {};
+    ULONG text_length = 0;
+    hr = selection.range->GetText(
+        edit_cookie, 0, buffer.data(), static_cast<ULONG>(buffer.size()),
+        &text_length);
+    if (SUCCEEDED(hr) && text_length > 0) {
+      snapshot_->text.assign(buffer.data(), buffer.data() + text_length);
+      hr = selection.range->Clone(&snapshot_->range);
+    }
+
+    selection.range->Release();
+    return SUCCEEDED(hr) ? S_OK : hr;
+  }
+
+ private:
+  ITfContext* context_ = nullptr;
+  SelectionTextSnapshot* snapshot_ = nullptr;
+};
+
+struct CaretTextSnapshot {
+  CaretTextSnapshot() = default;
+  CaretTextSnapshot(const CaretTextSnapshot&) = delete;
+  CaretTextSnapshot& operator=(const CaretTextSnapshot&) = delete;
+
+  ~CaretTextSnapshot() {
+    SafeRelease(caret_range);
+  }
+
+  std::wstring text_before_caret;
+  ITfRange* caret_range = nullptr;
+};
+
+class CaretTextReadEditSession final : public EditSessionBase {
+ public:
+  CaretTextReadEditSession(ITfContext* context, CaretTextSnapshot* snapshot)
+      : context_(context), snapshot_(snapshot) {
+    context_->AddRef();
+  }
+
+  ~CaretTextReadEditSession() override {
+    context_->Release();
+  }
+
+  STDMETHODIMP DoEditSession(TfEditCookie edit_cookie) override {
+    if (snapshot_ == nullptr) {
+      return E_INVALIDARG;
+    }
+
+    snapshot_->text_before_caret.clear();
+    SafeRelease(snapshot_->caret_range);
+
+    TF_SELECTION selection = {};
+    ULONG fetched = 0;
+    HRESULT hr = context_->GetSelection(edit_cookie, 0, 1, &selection, &fetched);
+    if (FAILED(hr) || fetched == 0 || selection.range == nullptr) {
+      return S_OK;
+    }
+
+    BOOL empty = TRUE;
+    hr = selection.range->IsEmpty(edit_cookie, &empty);
+    if (FAILED(hr) || !empty) {
+      selection.range->Release();
+      return S_OK;
+    }
+
+    hr = selection.range->Clone(&snapshot_->caret_range);
+    if (SUCCEEDED(hr)) {
+      hr = snapshot_->caret_range->Collapse(edit_cookie, TF_ANCHOR_START);
+    }
+
+    ITfRange* text_range = nullptr;
+    if (SUCCEEDED(hr)) {
+      hr = selection.range->Clone(&text_range);
+    }
+    selection.range->Release();
+    if (FAILED(hr) || text_range == nullptr) {
+      SafeRelease(text_range);
+      return SUCCEEDED(hr) ? S_OK : hr;
+    }
+
+    hr = text_range->Collapse(edit_cookie, TF_ANCHOR_START);
+    LONG moved = 0;
+    constexpr LONG kMaxCaretContextUtf16 = 64;
+    if (SUCCEEDED(hr)) {
+      hr = text_range->ShiftStart(edit_cookie, -kMaxCaretContextUtf16, &moved,
+                                  nullptr);
+    }
+
+    std::array<WCHAR, kMaxCaretContextUtf16> buffer = {};
+    ULONG text_length = 0;
+    if (SUCCEEDED(hr)) {
+      hr = text_range->GetText(
+          edit_cookie, 0, buffer.data(), static_cast<ULONG>(buffer.size()),
+          &text_length);
+    }
+    if (SUCCEEDED(hr) && text_length > 0) {
+      snapshot_->text_before_caret.assign(buffer.data(),
+                                          buffer.data() + text_length);
+    }
+
+    text_range->Release();
+    return SUCCEEDED(hr) ? S_OK : hr;
+  }
+
+ private:
+  ITfContext* context_ = nullptr;
+  CaretTextSnapshot* snapshot_ = nullptr;
+};
+
+class SelectionCandidateCommitEditSession final : public EditSessionBase {
+ public:
+  SelectionCandidateCommitEditSession(ITfContext* context,
+                                      ITfRange* selection_range,
+                                      std::uint32_t matched_utf16_length,
+                                      std::wstring candidate_text)
+      : context_(context),
+        selection_range_(selection_range),
+        matched_utf16_length_(matched_utf16_length),
+        candidate_text_(std::move(candidate_text)) {
+    context_->AddRef();
+    selection_range_->AddRef();
+  }
+
+  ~SelectionCandidateCommitEditSession() override {
+    selection_range_->Release();
+    context_->Release();
+  }
+
+  STDMETHODIMP DoEditSession(TfEditCookie edit_cookie) override {
+    if (candidate_text_.empty() || matched_utf16_length_ == 0) {
+      return E_INVALIDARG;
+    }
+
+    ITfRange* replacement_range = nullptr;
+    HRESULT hr = selection_range_->Clone(&replacement_range);
+    if (FAILED(hr)) {
+      return hr;
+    }
+
+    hr = replacement_range->Collapse(edit_cookie, TF_ANCHOR_START);
+    LONG moved = 0;
+    const LONG matched_length = static_cast<LONG>(matched_utf16_length_);
+    if (SUCCEEDED(hr)) {
+      hr = replacement_range->ShiftEnd(edit_cookie, matched_length, &moved,
+                                       nullptr);
+    }
+    if (SUCCEEDED(hr) && moved != matched_length) {
+      hr = S_FALSE;
+    }
+    if (SUCCEEDED(hr)) {
+      hr = replacement_range->SetText(
+          edit_cookie, 0, candidate_text_.c_str(),
+          static_cast<LONG>(candidate_text_.size()));
+    }
+    if (SUCCEEDED(hr)) {
+      hr = SetContextSelectionToRangeEnd(edit_cookie, context_,
+                                         replacement_range);
+    }
+
+    replacement_range->Release();
+    return hr;
+  }
+
+ private:
+  ITfContext* context_ = nullptr;
+  ITfRange* selection_range_ = nullptr;
+  std::uint32_t matched_utf16_length_ = 0;
+  std::wstring candidate_text_;
+};
+
+class RangeCandidateCommitEditSession final : public EditSessionBase {
+ public:
+  RangeCandidateCommitEditSession(ITfContext* context, ITfRange* target_range,
+                                  std::wstring candidate_text)
+      : context_(context),
+        target_range_(target_range),
+        candidate_text_(std::move(candidate_text)) {
+    context_->AddRef();
+    target_range_->AddRef();
+  }
+
+  ~RangeCandidateCommitEditSession() override {
+    target_range_->Release();
+    context_->Release();
+  }
+
+  STDMETHODIMP DoEditSession(TfEditCookie edit_cookie) override {
+    if (candidate_text_.empty()) {
+      return E_INVALIDARG;
+    }
+
+    ITfRange* replacement_range = nullptr;
+    HRESULT hr = target_range_->Clone(&replacement_range);
+    if (FAILED(hr)) {
+      return hr;
+    }
+
+    hr = replacement_range->SetText(edit_cookie, 0, candidate_text_.c_str(),
+                                    static_cast<LONG>(candidate_text_.size()));
+    if (SUCCEEDED(hr)) {
+      hr = SetContextSelectionToRangeEnd(edit_cookie, context_,
+                                         replacement_range);
+    }
+
+    replacement_range->Release();
+    return hr;
+  }
+
+ private:
+  ITfContext* context_ = nullptr;
+  ITfRange* target_range_ = nullptr;
+  std::wstring candidate_text_;
+};
+
+class CaretSegmentRangeEditSession final : public EditSessionBase {
+ public:
+  CaretSegmentRangeEditSession(ITfRange* caret_range,
+                               std::uint32_t run_utf16_length,
+                               std::uint32_t start_utf16_offset,
+                               std::uint32_t matched_utf16_length,
+                               ITfRange** target_range)
+      : caret_range_(caret_range),
+        run_utf16_length_(run_utf16_length),
+        start_utf16_offset_(start_utf16_offset),
+        matched_utf16_length_(matched_utf16_length),
+        target_range_(target_range) {
+    caret_range_->AddRef();
+  }
+
+  ~CaretSegmentRangeEditSession() override {
+    caret_range_->Release();
+  }
+
+  STDMETHODIMP DoEditSession(TfEditCookie edit_cookie) override {
+    if (target_range_ == nullptr || *target_range_ != nullptr ||
+        matched_utf16_length_ == 0 ||
+        start_utf16_offset_ + matched_utf16_length_ > run_utf16_length_) {
+      return E_INVALIDARG;
+    }
+
+    ITfRange* range = nullptr;
+    HRESULT hr = caret_range_->Clone(&range);
+    if (FAILED(hr)) {
+      return hr;
+    }
+
+    const LONG distance_to_start =
+        -static_cast<LONG>(run_utf16_length_ - start_utf16_offset_);
+    const LONG distance_to_end = -static_cast<LONG>(
+        run_utf16_length_ - start_utf16_offset_ - matched_utf16_length_);
+    LONG moved_start = 0;
+    LONG moved_end = 0;
+    hr = range->ShiftStart(edit_cookie, distance_to_start, &moved_start,
+                           nullptr);
+    if (SUCCEEDED(hr)) {
+      hr = range->ShiftEnd(edit_cookie, distance_to_end, &moved_end, nullptr);
+    }
+    if (SUCCEEDED(hr) &&
+        (moved_start != distance_to_start || moved_end != distance_to_end)) {
+      hr = S_FALSE;
+    }
+    if (SUCCEEDED(hr)) {
+      *target_range_ = range;
+      range = nullptr;
+    }
+
+    SafeRelease(range);
+    return hr;
+  }
+
+ private:
+  ITfRange* caret_range_ = nullptr;
+  std::uint32_t run_utf16_length_ = 0;
+  std::uint32_t start_utf16_offset_ = 0;
+  std::uint32_t matched_utf16_length_ = 0;
+  ITfRange** target_range_ = nullptr;
+};
+
+class SelectionPrefixTextExtentEditSession final : public EditSessionBase {
+ public:
+  SelectionPrefixTextExtentEditSession(ITfContextView* view,
+                                       ITfRange* selection_range,
+                                       std::uint32_t matched_utf16_length,
+                                       std::optional<RECT>* text_rect)
+      : view_(view),
+        selection_range_(selection_range),
+        matched_utf16_length_(matched_utf16_length),
+        text_rect_(text_rect) {
+    view_->AddRef();
+    selection_range_->AddRef();
+  }
+
+  ~SelectionPrefixTextExtentEditSession() override {
+    selection_range_->Release();
+    view_->Release();
+  }
+
+  STDMETHODIMP DoEditSession(TfEditCookie edit_cookie) override {
+    if (matched_utf16_length_ == 0 || text_rect_ == nullptr) {
+      return S_OK;
+    }
+
+    ITfRange* prefix_range = nullptr;
+    HRESULT hr = selection_range_->Clone(&prefix_range);
+    if (FAILED(hr)) {
+      return S_OK;
+    }
+
+    hr = prefix_range->Collapse(edit_cookie, TF_ANCHOR_START);
+    LONG moved = 0;
+    const LONG matched_length = static_cast<LONG>(matched_utf16_length_);
+    if (SUCCEEDED(hr)) {
+      hr = prefix_range->ShiftEnd(edit_cookie, matched_length, &moved,
+                                  nullptr);
+    }
+    if (SUCCEEDED(hr) && moved == matched_length) {
+      RECT rect = {};
+      BOOL clipped = FALSE;
+      hr = view_->GetTextExt(edit_cookie, prefix_range, &rect, &clipped);
+      if (SUCCEEDED(hr) && IsUsableScreenRect(rect)) {
+        *text_rect_ = rect;
+      }
+    }
+
+    prefix_range->Release();
+    return S_OK;
+  }
+
+ private:
+  ITfContextView* view_ = nullptr;
+  ITfRange* selection_range_ = nullptr;
+  std::uint32_t matched_utf16_length_ = 0;
   std::optional<RECT>* text_rect_ = nullptr;
 };
 
@@ -168,6 +587,25 @@ std::wstring Utf8ToWideText(std::string_view text) {
   return wide_text;
 }
 
+std::string WideToUtf8Text(std::wstring_view text) {
+  if (text.empty()) {
+    return {};
+  }
+
+  const int length = WideCharToMultiByte(
+      CP_UTF8, WC_ERR_INVALID_CHARS, text.data(),
+      static_cast<int>(text.size()), nullptr, 0, nullptr, nullptr);
+  if (length <= 0) {
+    return {};
+  }
+
+  std::string utf8_text(static_cast<std::size_t>(length), '\0');
+  WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, text.data(),
+                      static_cast<int>(text.size()), utf8_text.data(), length,
+                      nullptr, nullptr);
+  return utf8_text;
+}
+
 adapters::dictionary::HanjaDictionaryPaths ResolveHanjaDictionaryPaths() {
   adapters::dictionary::HanjaDictionaryPaths paths =
       adapters::dictionary::DefaultHanjaDictionaryPaths();
@@ -181,16 +619,16 @@ adapters::dictionary::HanjaDictionaryPaths ResolveHanjaDictionaryPaths() {
   const std::filesystem::path installed_hanja_dir =
       std::filesystem::path(module_path).parent_path() / L"data" / L"hanja";
   std::error_code error_code;
-  const std::filesystem::path installed_hanja =
-      installed_hanja_dir / L"hanja.txt";
-  const std::filesystem::path installed_symbol =
-      installed_hanja_dir / L"mssymbol.txt";
-  if (std::filesystem::is_regular_file(installed_hanja, error_code)) {
-    paths.hanja_path = installed_hanja;
+  const std::filesystem::path installed_hanja_binary =
+      installed_hanja_dir / L"hanja.bin";
+  const std::filesystem::path installed_symbol_binary =
+      installed_hanja_dir / L"mssymbol.bin";
+  if (std::filesystem::is_regular_file(installed_hanja_binary, error_code)) {
+    paths.hanja_binary_path = installed_hanja_binary;
   }
   error_code.clear();
-  if (std::filesystem::is_regular_file(installed_symbol, error_code)) {
-    paths.symbol_path = installed_symbol;
+  if (std::filesystem::is_regular_file(installed_symbol_binary, error_code)) {
+    paths.symbol_binary_path = installed_symbol_binary;
   }
 
   return paths;
@@ -681,8 +1119,10 @@ STDMETHODIMP TipTextService::OnSetFocus(ITfDocumentMgr* focused,
                   PointerToString(text_edit_sink_context_) + L" composing=" +
                   std::to_wstring(session_.IsComposing() ? 1 : 0));
 #endif
-  if (text_edit_sink_context_ != nullptr && session_.IsComposing()) {
+  if (candidate_list_ != nullptr) {
     CloseCandidateList();
+  }
+  if (text_edit_sink_context_ != nullptr && session_.IsComposing()) {
     logic_.OnFocusLost();
     FlushPendingOperations(text_edit_sink_context_,
                            EditSessionRequestPolicy::kSyncPreferredWrite,
@@ -721,7 +1161,20 @@ STDMETHODIMP TipTextService::OnPopContext(ITfContext*) {
 STDMETHODIMP TipTextService::OnEndEdit(ITfContext* context,
                                        TfEditCookie read_cookie,
                                        ITfEditRecord*) {
-  if (context == nullptr || edit_sink_.is_flushing() || !session_.IsComposing()) {
+  if (context == nullptr || edit_sink_.is_flushing()) {
+    return S_OK;
+  }
+
+  if ((candidate_commit_target_kind_ ==
+           CandidateCommitTargetKind::kSelectionRange &&
+       selection_candidate_target_.context == context) ||
+      (candidate_commit_target_kind_ == CandidateCommitTargetKind::kCaretRange &&
+       caret_candidate_target_.context == context)) {
+    CloseCandidateList();
+    return S_OK;
+  }
+
+  if (!session_.IsComposing()) {
     return S_OK;
   }
 
@@ -785,7 +1238,7 @@ STDMETHODIMP TipTextService::OnTestKeyDown(ITfContext* context, WPARAM wparam,
   if (IsHanjaVirtualKey(wparam)) {
     pending_key_result_.active = true;
     pending_key_result_.event = event;
-    pending_key_result_.eaten = ime_open_ && session_.IsComposing();
+    pending_key_result_.eaten = ime_open_;
     *eaten = pending_key_result_.eaten ? TRUE : FALSE;
     return S_OK;
   }
@@ -837,6 +1290,12 @@ STDMETHODIMP TipTextService::OnKeyDown(ITfContext* context, WPARAM wparam,
   if (candidate_list_ != nullptr &&
       !candidate::IsPureModifierVirtualKey(wparam)) {
     ClearPendingKeyResult();
+    if (IsHanjaVirtualKey(wparam) && ime_open_ &&
+        AdvanceHanjaCandidateSegment(context)) {
+      *eaten = TRUE;
+      return S_OK;
+    }
+
     const candidate::CandidateKeyResult candidate_key_result =
         candidate_list_->HandleVirtualKey(wparam);
     if (candidate_key_result == candidate::CandidateKeyResult::kCommit) {
@@ -848,16 +1307,16 @@ STDMETHODIMP TipTextService::OnKeyDown(ITfContext* context, WPARAM wparam,
     return S_OK;
   }
 
-  if (context == nullptr) {
-    return S_OK;
-  }
-
   if (IsHanjaVirtualKey(wparam)) {
     ClearPendingKeyResult();
-    if (ime_open_ && session_.IsComposing()) {
+    if (ime_open_) {
       HandleHanjaKey(context);
       *eaten = TRUE;
     }
+    return S_OK;
+  }
+
+  if (context == nullptr) {
     return S_OK;
   }
 
@@ -1070,10 +1529,82 @@ void TipTextService::OnCandidateListFinalize() {
       candidate_list_->SelectedItem();
   const std::string candidate_text =
       selected_item != nullptr ? selected_item->value_utf8 : std::string();
+  const CandidateCommitTargetKind target_kind = candidate_commit_target_kind_;
+  ITfContext* selection_context = nullptr;
+  ITfRange* selection_range = nullptr;
+  std::uint32_t selection_matched_utf16_length = 0;
+  ITfContext* caret_context = nullptr;
+  ITfRange* caret_range = nullptr;
+  if (target_kind == CandidateCommitTargetKind::kSelectionRange) {
+    selection_context = selection_candidate_target_.context;
+    selection_range = selection_candidate_target_.range;
+    selection_matched_utf16_length =
+        selection_candidate_target_.matched_utf16_length;
+    if (selection_context != nullptr) {
+      selection_context->AddRef();
+    }
+    if (selection_range != nullptr) {
+      selection_range->AddRef();
+    }
+  } else if (target_kind == CandidateCommitTargetKind::kCaretRange) {
+    caret_context = caret_candidate_target_.context;
+    caret_range = caret_candidate_target_.range;
+    if (caret_context != nullptr) {
+      caret_context->AddRef();
+    }
+    if (caret_range != nullptr) {
+      caret_range->AddRef();
+    }
+  }
+
   CloseCandidateList();
   if (candidate_text.empty()) {
+    SafeRelease(selection_range);
+    SafeRelease(selection_context);
+    SafeRelease(caret_range);
+    SafeRelease(caret_context);
     return;
   }
+
+  if (target_kind == CandidateCommitTargetKind::kSelectionRange) {
+    const HRESULT hr = CommitSelectionCandidate(
+        candidate_text, selection_context, selection_range,
+        selection_matched_utf16_length);
+#if defined(_DEBUG)
+    if (FAILED(hr)) {
+      debug::DebugLog(
+          L"[MilkyWayIME][CandidateFinalize][SelectionCommitFailed] hr=0x" +
+          FormatHex(static_cast<std::uint32_t>(hr)));
+    }
+#endif
+    SafeRelease(selection_range);
+    SafeRelease(selection_context);
+    SafeRelease(caret_range);
+    SafeRelease(caret_context);
+    return;
+  }
+
+  if (target_kind == CandidateCommitTargetKind::kCaretRange) {
+    const HRESULT hr =
+        CommitCaretCandidate(candidate_text, caret_context, caret_range);
+#if defined(_DEBUG)
+    if (FAILED(hr)) {
+      debug::DebugLog(
+          L"[MilkyWayIME][CandidateFinalize][CaretCommitFailed] hr=0x" +
+          FormatHex(static_cast<std::uint32_t>(hr)));
+    }
+#endif
+    SafeRelease(selection_range);
+    SafeRelease(selection_context);
+    SafeRelease(caret_range);
+    SafeRelease(caret_context);
+    return;
+  }
+
+  SafeRelease(selection_range);
+  SafeRelease(selection_context);
+  SafeRelease(caret_range);
+  SafeRelease(caret_context);
 
   if (!logic_.CommitCandidate(candidate_text)) {
     return;
@@ -2050,8 +2581,20 @@ void TipTextService::HandleShortcutAction(
 
 bool TipTextService::HandleHanjaKey(ITfContext* context) {
   CloseCandidateList();
-  if (!session_.IsComposing()) {
-    return false;
+  if (context == nullptr) {
+    return true;
+  }
+
+  if (session_.IsComposing()) {
+    return HandleCompositionHanjaKey(context);
+  }
+
+  return HandleSelectionHanjaKey(context);
+}
+
+bool TipTextService::HandleCompositionHanjaKey(ITfContext* context) {
+  if (context == nullptr || !session_.IsComposing()) {
+    return true;
   }
 
   const std::optional<engine::hanja::CandidateRequest> request =
@@ -2066,7 +2609,163 @@ bool TipTextService::HandleHanjaKey(ITfContext* context) {
     return true;
   }
 
-  return OpenCandidateList(context, candidates);
+  SetCompositionCandidateCommitTarget();
+  const bool opened = OpenCandidateList(context, candidates);
+  if (!opened) {
+    ClearCandidateCommitTarget();
+  }
+  return opened;
+}
+
+bool TipTextService::HandleSelectionHanjaKey(ITfContext* context) {
+  if (context == nullptr) {
+    return true;
+  }
+
+  std::wstring selection_text;
+  ITfRange* selection_range = nullptr;
+  bool selection_empty = false;
+  if (!ReadSelectionText(context, &selection_text, &selection_range,
+                         &selection_empty)) {
+    SafeRelease(selection_range);
+    if (selection_empty) {
+      return HandleCaretHanjaKey(context);
+    }
+    return true;
+  }
+
+  const std::string selected_utf8 = WideToUtf8Text(selection_text);
+  if (selected_utf8.empty()) {
+    SafeRelease(selection_range);
+    return true;
+  }
+
+  std::vector<engine::hanja::SelectionHanjaPrefixRequest> requests =
+      engine::hanja::CreateSelectionHanjaPrefixRequests(selected_utf8);
+  if (requests.empty()) {
+    requests =
+        engine::hanja::CreateSelectionHanjaReversePrefixRequests(selected_utf8);
+  }
+  for (const engine::hanja::SelectionHanjaPrefixRequest& request : requests) {
+    const std::vector<engine::hanja::Candidate> candidates =
+        hanja_dictionary_.Lookup(request.request);
+    if (candidates.empty()) {
+      continue;
+    }
+
+    SetSelectionCandidateCommitTarget(
+        context, selection_range,
+        static_cast<std::uint32_t>(request.matched_utf16_length));
+    const bool opened = OpenCandidateList(context, candidates);
+    SafeRelease(selection_range);
+    if (!opened) {
+      ClearCandidateCommitTarget();
+    }
+    return opened;
+  }
+
+  SafeRelease(selection_range);
+  return true;
+}
+
+bool TipTextService::HandleCaretHanjaKey(ITfContext* context) {
+  if (context == nullptr) {
+    return true;
+  }
+
+  std::wstring text_before_caret;
+  ITfRange* caret_range = nullptr;
+  if (!ReadCaretTextBeforeSelection(context, &text_before_caret,
+                                    &caret_range)) {
+    SafeRelease(caret_range);
+    return true;
+  }
+
+  const std::string text_before_caret_utf8 = WideToUtf8Text(text_before_caret);
+  const std::optional<engine::hanja::CaretHanjaRun> run =
+      engine::hanja::CreateCaretHanjaRun(text_before_caret_utf8);
+  if (!run.has_value() || run->utf16_length == 0 || run->text.empty()) {
+    SafeRelease(caret_range);
+    return true;
+  }
+
+  std::vector<CaretCandidateSegment> segments;
+  std::size_t byte_offset = 0;
+  std::uint32_t utf16_offset = 0;
+  while (byte_offset < run->text.size()) {
+    const std::string_view remaining(run->text.data() + byte_offset,
+                                     run->text.size() - byte_offset);
+    std::vector<engine::hanja::SelectionHanjaPrefixRequest> requests =
+        run->kind == engine::hanja::CandidateKind::kHanjaReverse
+            ? engine::hanja::CreateSelectionHanjaReversePrefixRequests(
+                  remaining)
+            : engine::hanja::CreateSelectionHanjaPrefixRequests(remaining);
+
+    bool resolved = false;
+    for (const engine::hanja::SelectionHanjaPrefixRequest& request : requests) {
+      std::vector<engine::hanja::Candidate> candidates =
+          hanja_dictionary_.Lookup(request.request);
+      if (candidates.empty()) {
+        continue;
+      }
+
+      ITfRange* target_range = nullptr;
+      if (!CreateCaretCandidateRange(
+              context, caret_range, static_cast<std::uint32_t>(run->utf16_length),
+              utf16_offset,
+              static_cast<std::uint32_t>(request.matched_utf16_length),
+              &target_range)) {
+        continue;
+      }
+
+      segments.push_back(CaretCandidateSegment{
+          target_range,
+          std::move(candidates),
+      });
+      byte_offset += request.matched_byte_length;
+      utf16_offset +=
+          static_cast<std::uint32_t>(request.matched_utf16_length);
+      resolved = true;
+      break;
+    }
+
+    if (!resolved) {
+      break;
+    }
+  }
+
+  SafeRelease(caret_range);
+  if (segments.empty()) {
+    return true;
+  }
+
+  SetCaretCandidateSegments(context, std::move(segments));
+  if (!OpenCaretSegmentCandidateList(context, 0)) {
+    ClearCaretCandidateSegments();
+    ClearCandidateCommitTarget();
+    return true;
+  }
+  return true;
+}
+
+bool TipTextService::AdvanceHanjaCandidateSegment(ITfContext* context) {
+  ITfContext* target_context =
+      context != nullptr ? context : caret_candidate_segments_context_;
+  if (target_context == nullptr ||
+      caret_candidate_segments_context_ != target_context ||
+      caret_candidate_segments_.size() < 2) {
+    return false;
+  }
+
+  const std::size_t next_segment =
+      (active_caret_candidate_segment_ + 1) % caret_candidate_segments_.size();
+  CloseCandidateListUi();
+  ClearCandidateCommitTarget();
+  if (!OpenCaretSegmentCandidateList(target_context, next_segment)) {
+    CloseCandidateList();
+    return false;
+  }
+  return true;
 }
 
 bool TipTextService::OpenCandidateList(
@@ -2120,21 +2819,294 @@ bool TipTextService::OpenCandidateList(
   return true;
 }
 
+bool TipTextService::OpenCaretSegmentCandidateList(ITfContext* context,
+                                                   std::size_t segment_index) {
+  if (context == nullptr || segment_index >= caret_candidate_segments_.size()) {
+    return false;
+  }
+
+  CaretCandidateSegment& segment = caret_candidate_segments_[segment_index];
+  SetCaretCandidateCommitTarget(context, segment.range);
+  const bool opened = OpenCandidateList(context, segment.candidates);
+  if (!opened) {
+    ClearCandidateCommitTarget();
+    return false;
+  }
+
+  active_caret_candidate_segment_ = segment_index;
+  return true;
+}
+
 void TipTextService::CloseCandidateList() {
-  if (candidate_list_ == nullptr) {
+  CloseCandidateListUi();
+  ClearCandidateCommitTarget();
+  ClearCaretCandidateSegments();
+}
+
+void TipTextService::CloseCandidateListUi() {
+  if (candidate_list_ != nullptr) {
+    candidate_list_->End();
+    candidate_list_->Release();
+    candidate_list_ = nullptr;
+  }
+}
+
+void TipTextService::SetCompositionCandidateCommitTarget() {
+  ClearCandidateCommitTarget();
+  candidate_commit_target_kind_ = CandidateCommitTargetKind::kComposition;
+}
+
+void TipTextService::SetSelectionCandidateCommitTarget(
+    ITfContext* context, ITfRange* range,
+    std::uint32_t matched_utf16_length) {
+  ClearCandidateCommitTarget();
+  if (context == nullptr || range == nullptr || matched_utf16_length == 0) {
     return;
   }
 
-  candidate_list_->End();
-  candidate_list_->Release();
-  candidate_list_ = nullptr;
+  selection_candidate_target_.context = context;
+  selection_candidate_target_.context->AddRef();
+  selection_candidate_target_.range = range;
+  selection_candidate_target_.range->AddRef();
+  selection_candidate_target_.matched_utf16_length = matched_utf16_length;
+  candidate_commit_target_kind_ = CandidateCommitTargetKind::kSelectionRange;
+}
+
+void TipTextService::SetCaretCandidateCommitTarget(ITfContext* context,
+                                                   ITfRange* range) {
+  ClearCandidateCommitTarget();
+  if (context == nullptr || range == nullptr) {
+    return;
+  }
+
+  caret_candidate_target_.context = context;
+  caret_candidate_target_.context->AddRef();
+  caret_candidate_target_.range = range;
+  caret_candidate_target_.range->AddRef();
+  candidate_commit_target_kind_ = CandidateCommitTargetKind::kCaretRange;
+}
+
+void TipTextService::ClearCandidateCommitTarget() {
+  candidate_commit_target_kind_ = CandidateCommitTargetKind::kNone;
+  SafeRelease(selection_candidate_target_.range);
+  SafeRelease(selection_candidate_target_.context);
+  selection_candidate_target_.matched_utf16_length = 0;
+  SafeRelease(caret_candidate_target_.range);
+  SafeRelease(caret_candidate_target_.context);
+}
+
+void TipTextService::SetCaretCandidateSegments(
+    ITfContext* context, std::vector<CaretCandidateSegment> segments) {
+  ClearCaretCandidateSegments();
+  if (context == nullptr || segments.empty()) {
+    return;
+  }
+
+  caret_candidate_segments_context_ = context;
+  caret_candidate_segments_context_->AddRef();
+  caret_candidate_segments_ = std::move(segments);
+  active_caret_candidate_segment_ = 0;
+}
+
+void TipTextService::ClearCaretCandidateSegments() {
+  for (CaretCandidateSegment& segment : caret_candidate_segments_) {
+    SafeRelease(segment.range);
+  }
+  caret_candidate_segments_.clear();
+  SafeRelease(caret_candidate_segments_context_);
+  active_caret_candidate_segment_ = 0;
+}
+
+bool TipTextService::ReadSelectionText(ITfContext* context, std::wstring* text,
+                                       ITfRange** range, bool* is_empty) const {
+  if (context == nullptr || text == nullptr || range == nullptr ||
+      is_empty == nullptr || client_id_ == TF_CLIENTID_NULL) {
+    return false;
+  }
+
+  text->clear();
+  *range = nullptr;
+  *is_empty = false;
+
+  SelectionTextSnapshot snapshot;
+  SelectionTextReadEditSession* edit_session =
+      new (std::nothrow) SelectionTextReadEditSession(context, &snapshot);
+  if (edit_session == nullptr) {
+    return false;
+  }
+
+  HRESULT edit_session_result = E_FAIL;
+  const HRESULT hr = context->RequestEditSession(
+      client_id_, edit_session, TF_ES_SYNC | TF_ES_READ, &edit_session_result);
+  edit_session->Release();
+  if (FAILED(hr) || FAILED(edit_session_result) || snapshot.text.empty() ||
+      snapshot.range == nullptr) {
+    *is_empty = snapshot.has_selection && snapshot.is_empty;
+    return false;
+  }
+
+  *text = std::move(snapshot.text);
+  *range = snapshot.range;
+  snapshot.range = nullptr;
+  return true;
+}
+
+bool TipTextService::ReadCaretTextBeforeSelection(
+    ITfContext* context, std::wstring* text_before_caret,
+    ITfRange** caret_range) const {
+  if (context == nullptr || text_before_caret == nullptr ||
+      caret_range == nullptr || client_id_ == TF_CLIENTID_NULL) {
+    return false;
+  }
+
+  text_before_caret->clear();
+  *caret_range = nullptr;
+
+  CaretTextSnapshot snapshot;
+  CaretTextReadEditSession* edit_session =
+      new (std::nothrow) CaretTextReadEditSession(context, &snapshot);
+  if (edit_session == nullptr) {
+    return false;
+  }
+
+  HRESULT edit_session_result = E_FAIL;
+  const HRESULT hr = context->RequestEditSession(
+      client_id_, edit_session, TF_ES_SYNC | TF_ES_READ, &edit_session_result);
+  edit_session->Release();
+  if (FAILED(hr) || FAILED(edit_session_result) ||
+      snapshot.text_before_caret.empty() || snapshot.caret_range == nullptr) {
+    return false;
+  }
+
+  *text_before_caret = std::move(snapshot.text_before_caret);
+  *caret_range = snapshot.caret_range;
+  snapshot.caret_range = nullptr;
+  return true;
+}
+
+bool TipTextService::CreateCaretCandidateRange(
+    ITfContext* context, ITfRange* caret_range,
+    std::uint32_t run_utf16_length, std::uint32_t start_utf16_offset,
+    std::uint32_t matched_utf16_length, ITfRange** target_range) const {
+  if (context == nullptr || caret_range == nullptr || target_range == nullptr ||
+      *target_range != nullptr || run_utf16_length == 0 ||
+      matched_utf16_length == 0 || client_id_ == TF_CLIENTID_NULL) {
+    return false;
+  }
+
+  CaretSegmentRangeEditSession* edit_session =
+      new (std::nothrow) CaretSegmentRangeEditSession(
+          caret_range, run_utf16_length, start_utf16_offset,
+          matched_utf16_length, target_range);
+  if (edit_session == nullptr) {
+    return false;
+  }
+
+  HRESULT edit_session_result = E_FAIL;
+  const HRESULT hr = context->RequestEditSession(
+      client_id_, edit_session, TF_ES_SYNC | TF_ES_READ, &edit_session_result);
+  edit_session->Release();
+  return SUCCEEDED(hr) && SUCCEEDED(edit_session_result) &&
+         *target_range != nullptr;
+}
+
+HRESULT TipTextService::CommitSelectionCandidate(
+    const std::string& candidate_text, ITfContext* context, ITfRange* range,
+    std::uint32_t matched_utf16_length) const {
+  if (context == nullptr || range == nullptr || matched_utf16_length == 0 ||
+      client_id_ == TF_CLIENTID_NULL) {
+    return E_INVALIDARG;
+  }
+
+  const std::wstring candidate_wide = Utf8ToWideText(candidate_text);
+  if (candidate_wide.empty()) {
+    return E_INVALIDARG;
+  }
+
+  SelectionCandidateCommitEditSession* edit_session =
+      new (std::nothrow) SelectionCandidateCommitEditSession(
+          context, range, matched_utf16_length, candidate_wide);
+  if (edit_session == nullptr) {
+    return E_OUTOFMEMORY;
+  }
+
+  HRESULT edit_session_result = E_FAIL;
+  HRESULT hr = context->RequestEditSession(
+      client_id_, edit_session, TF_ES_SYNC | TF_ES_READWRITE,
+      &edit_session_result);
+  if ((FAILED(hr) && ShouldRetryAsync(hr)) ||
+      (SUCCEEDED(hr) && ShouldRetryAsync(edit_session_result))) {
+    edit_session_result = E_FAIL;
+    hr = context->RequestEditSession(
+        client_id_, edit_session, TF_ES_ASYNCDONTCARE | TF_ES_READWRITE,
+        &edit_session_result);
+  }
+  edit_session->Release();
+  if (FAILED(hr)) {
+    return hr;
+  }
+
+  return edit_session_result;
+}
+
+HRESULT TipTextService::CommitCaretCandidate(
+    const std::string& candidate_text, ITfContext* context,
+    ITfRange* range) const {
+  if (context == nullptr || range == nullptr || client_id_ == TF_CLIENTID_NULL) {
+    return E_INVALIDARG;
+  }
+
+  const std::wstring candidate_wide = Utf8ToWideText(candidate_text);
+  if (candidate_wide.empty()) {
+    return E_INVALIDARG;
+  }
+
+  RangeCandidateCommitEditSession* edit_session =
+      new (std::nothrow) RangeCandidateCommitEditSession(
+          context, range, candidate_wide);
+  if (edit_session == nullptr) {
+    return E_OUTOFMEMORY;
+  }
+
+  HRESULT edit_session_result = E_FAIL;
+  HRESULT hr = context->RequestEditSession(
+      client_id_, edit_session, TF_ES_SYNC | TF_ES_READWRITE,
+      &edit_session_result);
+  if ((FAILED(hr) && ShouldRetryAsync(hr)) ||
+      (SUCCEEDED(hr) && ShouldRetryAsync(edit_session_result))) {
+    edit_session_result = E_FAIL;
+    hr = context->RequestEditSession(
+        client_id_, edit_session, TF_ES_ASYNCDONTCARE | TF_ES_READWRITE,
+        &edit_session_result);
+  }
+  edit_session->Release();
+  if (FAILED(hr)) {
+    return hr;
+  }
+
+  return edit_session_result;
 }
 
 std::optional<POINT> TipTextService::CandidateWindowAnchor(
     ITfContext* context) const {
-  const std::optional<RECT> composition_rect = CompositionTextRect(context);
-  if (composition_rect.has_value()) {
-    return POINT{composition_rect->left, composition_rect->bottom};
+  if (candidate_commit_target_kind_ ==
+      CandidateCommitTargetKind::kSelectionRange) {
+    const std::optional<RECT> selection_rect =
+        SelectionCandidateTextRect(context);
+    if (selection_rect.has_value()) {
+      return POINT{selection_rect->left, selection_rect->bottom};
+    }
+  } else if (candidate_commit_target_kind_ ==
+             CandidateCommitTargetKind::kCaretRange) {
+    const std::optional<RECT> caret_rect = CaretCandidateTextRect(context);
+    if (caret_rect.has_value()) {
+      return POINT{caret_rect->left, caret_rect->bottom};
+    }
+  } else {
+    const std::optional<RECT> composition_rect = CompositionTextRect(context);
+    if (composition_rect.has_value()) {
+      return POINT{composition_rect->left, composition_rect->bottom};
+    }
   }
 
   const std::optional<POINT> caret_anchor = AnchorFromGuiThreadCaret();
@@ -2174,6 +3146,81 @@ std::optional<RECT> TipTextService::CompositionTextRect(
   TextExtentEditSession* edit_session =
       new (std::nothrow) TextExtentEditSession(view, range, &text_rect);
   SafeRelease(range);
+  SafeRelease(view);
+  if (edit_session == nullptr) {
+    return std::nullopt;
+  }
+
+  HRESULT edit_session_result = E_FAIL;
+  hr = context->RequestEditSession(client_id_, edit_session,
+                                   TF_ES_SYNC | TF_ES_READ,
+                                   &edit_session_result);
+  edit_session->Release();
+  if (FAILED(hr) || FAILED(edit_session_result)) {
+    return std::nullopt;
+  }
+
+  return text_rect;
+}
+
+std::optional<RECT> TipTextService::SelectionCandidateTextRect(
+    ITfContext* context) const {
+  if (context == nullptr ||
+      candidate_commit_target_kind_ != CandidateCommitTargetKind::kSelectionRange ||
+      selection_candidate_target_.context != context ||
+      selection_candidate_target_.range == nullptr ||
+      selection_candidate_target_.matched_utf16_length == 0 ||
+      client_id_ == TF_CLIENTID_NULL) {
+    return std::nullopt;
+  }
+
+  ITfContextView* view = nullptr;
+  HRESULT hr = context->GetActiveView(&view);
+  if (FAILED(hr) || view == nullptr) {
+    return std::nullopt;
+  }
+
+  std::optional<RECT> text_rect;
+  SelectionPrefixTextExtentEditSession* edit_session =
+      new (std::nothrow) SelectionPrefixTextExtentEditSession(
+          view, selection_candidate_target_.range,
+          selection_candidate_target_.matched_utf16_length, &text_rect);
+  SafeRelease(view);
+  if (edit_session == nullptr) {
+    return std::nullopt;
+  }
+
+  HRESULT edit_session_result = E_FAIL;
+  hr = context->RequestEditSession(client_id_, edit_session,
+                                   TF_ES_SYNC | TF_ES_READ,
+                                   &edit_session_result);
+  edit_session->Release();
+  if (FAILED(hr) || FAILED(edit_session_result)) {
+    return std::nullopt;
+  }
+
+  return text_rect;
+}
+
+std::optional<RECT> TipTextService::CaretCandidateTextRect(
+    ITfContext* context) const {
+  if (context == nullptr ||
+      candidate_commit_target_kind_ != CandidateCommitTargetKind::kCaretRange ||
+      caret_candidate_target_.context != context ||
+      caret_candidate_target_.range == nullptr ||
+      client_id_ == TF_CLIENTID_NULL) {
+    return std::nullopt;
+  }
+
+  ITfContextView* view = nullptr;
+  HRESULT hr = context->GetActiveView(&view);
+  if (FAILED(hr) || view == nullptr) {
+    return std::nullopt;
+  }
+
+  std::optional<RECT> text_rect;
+  TextExtentEditSession* edit_session = new (std::nothrow)
+      TextExtentEditSession(view, caret_candidate_target_.range, &text_rect);
   SafeRelease(view);
   if (edit_session == nullptr) {
     return std::nullopt;

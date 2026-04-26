@@ -83,6 +83,17 @@ libhangul:3sin-p2
 
 세벌식 계열의 갈마들이는 libhangul의 `HANGUL_IC_OPTION_AUTO_REORDER` 옵션을 켜서 처리합니다. MilkyWayIME 자체 설정으로 켜고 끄는 UI는 아직 없습니다.
 
+## 한자 변환
+
+한자 후보는 libhangul 사전 API를 통해 조회합니다. 런타임은 설치된 DLL 옆의 `data\hanja`에서 `hanja.bin`, `mssymbol.bin` binary cache만 로드합니다. txt 파일은 개발 중 binary cache를 생성할 때만 사용합니다.
+소스 트리의 binary cache는 elevated MSBuild 환경에서 `tools\generate-hanja-cache.cmd`로 다시 생성합니다.
+
+- 조합 중인 한글 음절에서는 기존처럼 한글→한자 후보를 표시합니다.
+- 선택 영역이 있으면 선택 시작 prefix만 봅니다. 한글 prefix는 한자 후보, 한자 prefix는 한글 역변환 후보를 표시합니다.
+- 선택 영역이 없고 조합 중도 아니면 caret 바로 앞의 연속 한글 또는 한자 run만 봅니다. 공백이나 문장부호를 넘어 이전 단어를 찾지 않습니다.
+- caret 변환 후보창이 열린 상태에서 Hanja 키를 다시 누르면 현재 후보를 확정하지 않고 다음 사전 segment 후보로 이동합니다.
+- 형태소 분석, 조사 분리, 선택 영역 내부 검색은 아직 하지 않습니다.
+
 ## 커스텀 한글 자판
 
 커스텀 한글 자판은 MilkyWayIME JSON이 아니라 libhangul XML 형식을 기준으로 설계합니다.

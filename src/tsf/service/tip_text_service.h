@@ -10,6 +10,8 @@
 #include <msctf.h>
 
 #include <atomic>
+#include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>
@@ -41,6 +43,29 @@ struct PendingKeyResult {
   bool active = false;
   bool eaten = false;
   engine::key::NormalizedKeyEvent event;
+};
+
+enum class CandidateCommitTargetKind {
+  kNone,
+  kComposition,
+  kSelectionRange,
+  kCaretRange,
+};
+
+struct SelectionCandidateTarget {
+  ITfContext* context = nullptr;
+  ITfRange* range = nullptr;
+  std::uint32_t matched_utf16_length = 0;
+};
+
+struct CaretCandidateTarget {
+  ITfContext* context = nullptr;
+  ITfRange* range = nullptr;
+};
+
+struct CaretCandidateSegment {
+  ITfRange* range = nullptr;
+  std::vector<engine::hanja::Candidate> candidates;
 };
 
 class TipTextService final : public ITfTextInputProcessorEx,
@@ -163,12 +188,44 @@ class TipTextService final : public ITfTextInputProcessorEx,
   void HandleShortcutAction(ITfContext* context,
                             engine::shortcut::ShortcutAction action);
   bool HandleHanjaKey(ITfContext* context);
+  bool HandleCompositionHanjaKey(ITfContext* context);
+  bool HandleSelectionHanjaKey(ITfContext* context);
+  bool HandleCaretHanjaKey(ITfContext* context);
+  bool AdvanceHanjaCandidateSegment(ITfContext* context);
   bool OpenCandidateList(
       ITfContext* context,
       const std::vector<engine::hanja::Candidate>& candidates);
+  bool OpenCaretSegmentCandidateList(ITfContext* context,
+                                     std::size_t segment_index);
   void CloseCandidateList();
+  void CloseCandidateListUi();
+  void SetCompositionCandidateCommitTarget();
+  void SetSelectionCandidateCommitTarget(ITfContext* context, ITfRange* range,
+                                         std::uint32_t matched_utf16_length);
+  void SetCaretCandidateCommitTarget(ITfContext* context, ITfRange* range);
+  void ClearCandidateCommitTarget();
+  void SetCaretCandidateSegments(ITfContext* context,
+                                 std::vector<CaretCandidateSegment> segments);
+  void ClearCaretCandidateSegments();
+  bool ReadSelectionText(ITfContext* context, std::wstring* text,
+                         ITfRange** range, bool* is_empty) const;
+  bool ReadCaretTextBeforeSelection(ITfContext* context,
+                                    std::wstring* text_before_caret,
+                                    ITfRange** caret_range) const;
+  bool CreateCaretCandidateRange(ITfContext* context, ITfRange* caret_range,
+                                 std::uint32_t run_utf16_length,
+                                 std::uint32_t start_utf16_offset,
+                                 std::uint32_t matched_utf16_length,
+                                 ITfRange** target_range) const;
+  HRESULT CommitSelectionCandidate(const std::string& candidate_text,
+                                   ITfContext* context, ITfRange* range,
+                                   std::uint32_t matched_utf16_length) const;
+  HRESULT CommitCaretCandidate(const std::string& candidate_text,
+                               ITfContext* context, ITfRange* range) const;
   std::optional<POINT> CandidateWindowAnchor(ITfContext* context) const;
   std::optional<RECT> CompositionTextRect(ITfContext* context) const;
+  std::optional<RECT> SelectionCandidateTextRect(ITfContext* context) const;
+  std::optional<RECT> CaretCandidateTextRect(ITfContext* context) const;
   HRESULT MoveSelectionToRangeEnd(TfEditCookie edit_cookie, ITfContext* context,
                                   ITfRange* range) const;
   HRESULT ClearCompositionDisplayAttribute(TfEditCookie edit_cookie,
@@ -201,6 +258,13 @@ class TipTextService final : public ITfTextInputProcessorEx,
   edit::TsfTextEditSink edit_sink_;
   TextService logic_;
   candidate::CandidateListUi* candidate_list_ = nullptr;
+  CandidateCommitTargetKind candidate_commit_target_kind_ =
+      CandidateCommitTargetKind::kNone;
+  SelectionCandidateTarget selection_candidate_target_;
+  CaretCandidateTarget caret_candidate_target_;
+  ITfContext* caret_candidate_segments_context_ = nullptr;
+  std::vector<CaretCandidateSegment> caret_candidate_segments_;
+  std::size_t active_caret_candidate_segment_ = 0;
   ::milkyway::tsf::langbar::InputModeLangBarItem* input_mode_lang_bar_item_ =
       nullptr;
 

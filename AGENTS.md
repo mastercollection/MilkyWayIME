@@ -41,6 +41,8 @@ This document defines the working rules for agents operating in `D:\Git\MilkyWay
 
 ## Validation Criteria
 
+- Run project build validation through elevated/admin MSBuild. Non-elevated build
+  results are not the authoritative validation result for this repository.
 - Verify that Korean composition input still behaves correctly.
 - Verify that the selected base layout maps input labels to QWERTY/libhangul tokens correctly.
 - Verify that each Korean layout forwards the expected QWERTY/libhangul token to `libhangul`.
