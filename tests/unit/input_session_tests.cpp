@@ -1,7 +1,11 @@
 #include <cassert>
 #include <cstdlib>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #if defined(_WIN32) && defined(_DEBUG)
@@ -11,6 +15,7 @@
 #include "adapters/libhangul/hangul_composer.h"
 #include "engine/key/key_analysis.h"
 #include "engine/key/physical_key.h"
+#include "engine/layout/base_layout_json_loader.h"
 #include "engine/layout/layout_registry.h"
 #include "engine/session/input_session.h"
 #include "engine/shortcut/shortcut_resolver.h"
@@ -18,6 +23,7 @@
 #include "tsf/edit/text_edit_sink.h"
 #include "tsf/edit/text_edit_plan.h"
 #include "tsf/service/text_service.h"
+#include "tsf/settings/user_settings.h"
 
 namespace {
 
@@ -42,6 +48,14 @@ milkyway::engine::key::PhysicalKey Key(std::uint16_t virtual_key) {
   milkyway::engine::key::PhysicalKey key;
   key.virtual_key = virtual_key;
   return key;
+}
+
+std::string ReadTextFile(const char* path) {
+  std::ifstream stream(path, std::ios::binary);
+  assert(stream);
+  std::ostringstream buffer;
+  buffer << stream.rdbuf();
+  return buffer.str();
 }
 
 void AssertOperation(const TextEditOperation& operation,
@@ -152,7 +166,7 @@ void TestShortcutResolver(
     const milkyway::engine::layout::LayoutRegistry& registry) {
   milkyway::engine::shortcut::ShortcutResolver resolver;
   milkyway::engine::shortcut::ShortcutQuery toggle_query;
-  toggle_query.physical_layout = registry.DefaultPhysicalLayout().id;
+  toggle_query.base_layout_id = registry.DefaultBaseLayout().id;
   toggle_query.modifiers.ctrl = true;
   toggle_query.modifiers.shift = true;
   toggle_query.input_label_key =
@@ -162,7 +176,7 @@ void TestShortcutResolver(
          milkyway::engine::shortcut::ShortcutAction::kToggleInputMode);
 
   milkyway::engine::shortcut::ShortcutQuery empty_layout_query = toggle_query;
-  empty_layout_query.physical_layout.clear();
+  empty_layout_query.base_layout_id.clear();
   assert(resolver.Resolve(empty_layout_query) ==
          milkyway::engine::shortcut::ShortcutAction::kNone);
 }
@@ -172,7 +186,7 @@ void TestLayoutRegistryEffectiveBaseLayout(
   milkyway::engine::key::PhysicalKey key;
   key.virtual_key = 'R';
   const auto event = registry.NormalizeKeyEvent(
-      registry.DefaultPhysicalLayout().id, key, {},
+      registry.DefaultBaseLayout().id, key, {},
       milkyway::engine::key::KeyTransition::kPressed);
   assert(event.input_label_key == milkyway::engine::key::LayoutKey::kR);
 
@@ -234,20 +248,20 @@ void TestBuiltInKoreanLayouts(
   assert(sebeolsik_shift_digit.ascii == '!');
 }
 
-void TestBuiltInPhysicalLayouts(
+void TestBuiltInBaseLayouts(
     const milkyway::engine::layout::LayoutRegistry& registry) {
   using milkyway::engine::key::LayoutKey;
   using milkyway::engine::key::KeyCategory;
   using milkyway::engine::key::KeyTransition;
 
-  const auto* qwerty = registry.FindPhysicalLayout("us_qwerty");
+  const auto* qwerty = registry.FindBaseLayout("us_qwerty");
   assert(qwerty != nullptr);
   assert(qwerty->display_name == "미국식 쿼티");
 
-  const auto* colemak = registry.FindPhysicalLayout("colemak");
+  const auto* colemak = registry.FindBaseLayout("colemak");
   assert(colemak != nullptr);
   assert(colemak->display_name == "콜맥");
-  assert(registry.FindPhysicalLayout("colemak_dh") == nullptr);
+  assert(registry.FindBaseLayout("colemak_dh") == nullptr);
 
   auto input_label_key = [&](const char* layout_id, std::uint16_t virtual_key) {
     return registry
@@ -321,10 +335,133 @@ void TestBuiltInPhysicalLayouts(
   assert_delimiter(0xBE, LayoutKey::kOemPeriod);
 }
 
+void TestUserSettingsResolver(
+    const milkyway::engine::layout::LayoutRegistry& registry) {
+  using milkyway::engine::layout::BaseLayoutDefinition;
+  using milkyway::engine::layout::BaseLayoutInterpretation;
+  using milkyway::engine::layout::LayoutRegistry;
+
+  milkyway::tsf::settings::RawUserSettings empty_raw;
+  const auto defaults =
+      milkyway::tsf::settings::ResolveUserSettings(empty_raw, registry);
+  assert(defaults.base_layout_id == registry.DefaultBaseLayout().id);
+  assert(defaults.korean_layout_id == registry.DefaultKoreanLayout().id);
+
+  milkyway::tsf::settings::RawUserSettings valid_raw;
+  valid_raw.base_layout_id = "colemak";
+  valid_raw.korean_layout_id = "libhangul:3f";
+  const auto valid =
+      milkyway::tsf::settings::ResolveUserSettings(valid_raw, registry);
+  assert(valid.base_layout_id == "colemak");
+  assert(valid.korean_layout_id == "libhangul:3f");
+
+  milkyway::tsf::settings::RawUserSettings invalid_raw;
+  invalid_raw.base_layout_id = "missing_base";
+  invalid_raw.korean_layout_id = "missing_korean";
+  const auto fallback =
+      milkyway::tsf::settings::ResolveUserSettings(invalid_raw, registry);
+  assert(fallback.base_layout_id == registry.DefaultBaseLayout().id);
+  assert(fallback.korean_layout_id == registry.DefaultKoreanLayout().id);
+
+  LayoutRegistry runtime_registry;
+  assert(runtime_registry.AddBaseLayout(BaseLayoutDefinition{
+      {"graphite", "그래파이트", BaseLayoutInterpretation::kEffectiveBaseLayout},
+      {}}));
+  milkyway::tsf::settings::RawUserSettings custom_raw;
+  custom_raw.base_layout_id = "graphite";
+  custom_raw.korean_layout_id = "libhangul:2";
+  const auto custom =
+      milkyway::tsf::settings::ResolveUserSettings(custom_raw,
+                                                   runtime_registry);
+  assert(custom.base_layout_id == "graphite");
+  assert(custom.korean_layout_id == "libhangul:2");
+}
+
+void TestBaseLayoutJsonLoader(
+    const milkyway::engine::layout::LayoutRegistry& registry) {
+  using milkyway::engine::key::LayoutKey;
+  using milkyway::engine::layout::LoadBaseLayoutDirectory;
+  using milkyway::engine::layout::LoadBaseLayoutJson;
+
+  const auto qwerty = LoadBaseLayoutJson(
+      ReadTextFile("data/layouts/base/us_qwerty.json"), "us_qwerty.json");
+  assert(qwerty.ok);
+  assert(qwerty.definition.layout.id == "us_qwerty");
+  assert(qwerty.definition.mappings.empty());
+
+  const auto colemak = LoadBaseLayoutJson(
+      ReadTextFile("data/layouts/base/colemak.json"), "colemak.json");
+  assert(colemak.ok);
+  assert(colemak.definition.layout.id == "colemak");
+  assert(!colemak.definition.mappings.empty());
+
+  auto assert_load_fails = [](std::string_view json) {
+    const auto result =
+        milkyway::engine::layout::LoadBaseLayoutJson(json, "inline");
+    assert(!result.ok);
+    assert(!result.error.empty());
+  };
+
+  assert_load_fails("{");
+  assert_load_fails(R"json({"displayName":"Missing ID","keys":{}})json");
+  assert_load_fails(R"json({"id":"missing_name","keys":{}})json");
+  assert_load_fails(R"json({"id":"missing_keys","displayName":"Missing keys"})json");
+  assert_load_fails(R"json({"id":"bad_value","displayName":"Bad","keys":{"s":123}})json");
+  assert_load_fails(R"json({"id":"bad_key","displayName":"Bad","keys":{"!":"a"}})json");
+  assert_load_fails(R"json({"id":"dup","displayName":"Duplicate","keys":{"a":"b"}})json");
+
+  auto custom_definition = colemak.definition;
+  custom_definition.layout.id = "colemak_custom";
+  custom_definition.layout.display_name = "Custom Colemak";
+  milkyway::engine::layout::LayoutRegistry custom_registry;
+  assert(custom_registry.AddBaseLayout(std::move(custom_definition)));
+  assert(custom_registry.FindBaseLayout("colemak_custom") != nullptr);
+  assert(custom_registry.ResolveBaseLayoutLabelKey("colemak_custom",
+                                                   LayoutKey::kS) ==
+         LayoutKey::kR);
+  assert(custom_registry.ResolveHangulTokenKey("colemak_custom",
+                                               LayoutKey::kR) ==
+         LayoutKey::kS);
+
+  assert(custom_registry.AddBaseLayout(
+      milkyway::engine::layout::BaseLayoutDefinition{
+          {registry.DefaultBaseLayout().id, "Override",
+           milkyway::engine::layout::BaseLayoutInterpretation::
+               kEffectiveBaseLayout},
+          {{LayoutKey::kA, LayoutKey::kB},
+           {LayoutKey::kB, LayoutKey::kA}}}));
+  const auto* overridden_default =
+      custom_registry.FindBaseLayout(registry.DefaultBaseLayout().id);
+  assert(overridden_default != nullptr);
+  assert(overridden_default->display_name == "Override");
+  assert(custom_registry.ResolveBaseLayoutLabelKey(
+             registry.DefaultBaseLayout().id, LayoutKey::kA) ==
+         LayoutKey::kB);
+  assert(custom_registry.ResolveHangulTokenKey(registry.DefaultBaseLayout().id,
+                                               LayoutKey::kB) ==
+         LayoutKey::kA);
+
+  const std::filesystem::path temp_directory =
+      std::filesystem::temp_directory_path() /
+      "milkyway_base_layout_loader_test";
+  std::filesystem::remove_all(temp_directory);
+  std::filesystem::create_directories(temp_directory);
+  {
+    std::ofstream(temp_directory / "00_bad.json") << "{";
+    std::ofstream(temp_directory / "10_ok.json")
+        << R"json({"id":"directory_ok","displayName":"Directory OK","keys":{}})json";
+  }
+  const auto directory_result = LoadBaseLayoutDirectory(temp_directory);
+  assert(directory_result.errors.size() == 1);
+  assert(directory_result.definitions.size() == 1);
+  assert(directory_result.definitions.front().layout.id == "directory_ok");
+  std::filesystem::remove_all(temp_directory);
+}
+
 void TestTextServiceLifecycle(
     const milkyway::engine::layout::LayoutRegistry& registry) {
   milkyway::engine::session::InputSession session(
-      registry.DefaultPhysicalLayout().id, registry.DefaultKoreanLayout().id);
+      registry.DefaultBaseLayout().id, registry.DefaultKoreanLayout().id);
   RecordingEditSink sink;
   milkyway::tsf::service::TextService service(
       &session, milkyway::adapters::libhangul::CreateLibhangulComposer(),
@@ -512,7 +649,7 @@ void TestTextServiceBaseLayoutPrintableDelimiter(
 void TestTextServiceBackspaceClearsVisibleComposition(
     const milkyway::engine::layout::LayoutRegistry& registry) {
   milkyway::engine::session::InputSession session(
-      registry.DefaultPhysicalLayout().id, registry.DefaultKoreanLayout().id);
+      registry.DefaultBaseLayout().id, registry.DefaultKoreanLayout().id);
   RecordingEditSink sink;
   milkyway::tsf::service::TextService service(
       &session, milkyway::adapters::libhangul::CreateLibhangulComposer(),
@@ -560,7 +697,7 @@ void TestTextServiceBackspaceClearsVisibleComposition(
 void TestTextServiceAutoReorder(
     const milkyway::engine::layout::LayoutRegistry& registry) {
   milkyway::engine::session::InputSession session(
-      registry.DefaultPhysicalLayout().id, registry.DefaultKoreanLayout().id);
+      registry.DefaultBaseLayout().id, registry.DefaultKoreanLayout().id);
   RecordingEditSink sink;
   milkyway::tsf::service::TextService service(
       &session, milkyway::adapters::libhangul::CreateLibhangulComposer(),
@@ -596,7 +733,7 @@ void TestTextServicePrepareImeModeToggle(
     const milkyway::engine::layout::LayoutRegistry& registry) {
   {
     milkyway::engine::session::InputSession session(
-        registry.DefaultPhysicalLayout().id, registry.DefaultKoreanLayout().id);
+        registry.DefaultBaseLayout().id, registry.DefaultKoreanLayout().id);
     RecordingEditSink sink;
     milkyway::tsf::service::TextService service(
         &session, milkyway::adapters::libhangul::CreateLibhangulComposer(),
@@ -625,7 +762,7 @@ void TestTextServicePrepareImeModeToggle(
 
   {
     milkyway::engine::session::InputSession session(
-        registry.DefaultPhysicalLayout().id, registry.DefaultKoreanLayout().id);
+        registry.DefaultBaseLayout().id, registry.DefaultKoreanLayout().id);
     RecordingEditSink sink;
     milkyway::tsf::service::TextService service(
         &session, milkyway::adapters::libhangul::CreateLibhangulComposer(),
@@ -643,7 +780,7 @@ void TestTextServiceShortcutAndTermination(
       [&](std::uint16_t virtual_key,
           const milkyway::engine::state::ModifierState& modifiers) {
         milkyway::engine::session::InputSession session(
-            registry.DefaultPhysicalLayout().id,
+            registry.DefaultBaseLayout().id,
             registry.DefaultKoreanLayout().id);
         RecordingEditSink sink;
         milkyway::tsf::service::TextService service(
@@ -698,7 +835,7 @@ void TestTextServiceShortcutAndTermination(
 
   {
     milkyway::engine::session::InputSession session(
-        registry.DefaultPhysicalLayout().id, registry.DefaultKoreanLayout().id);
+        registry.DefaultBaseLayout().id, registry.DefaultKoreanLayout().id);
     RecordingEditSink sink;
     milkyway::tsf::service::TextService service(
         &session, milkyway::adapters::libhangul::CreateLibhangulComposer(),
@@ -731,7 +868,7 @@ void TestTextServiceShortcutAndTermination(
 
   {
     milkyway::engine::session::InputSession session(
-        registry.DefaultPhysicalLayout().id, registry.DefaultKoreanLayout().id);
+        registry.DefaultBaseLayout().id, registry.DefaultKoreanLayout().id);
     RecordingEditSink sink;
     milkyway::tsf::service::TextService service(
         &session, milkyway::adapters::libhangul::CreateLibhangulComposer(),
@@ -751,7 +888,7 @@ void TestTextServiceShortcutAndTermination(
 
   {
     milkyway::engine::session::InputSession session(
-        registry.DefaultPhysicalLayout().id, registry.DefaultKoreanLayout().id);
+        registry.DefaultBaseLayout().id, registry.DefaultKoreanLayout().id);
     RecordingEditSink sink;
     milkyway::tsf::service::TextService service(
         &session, milkyway::adapters::libhangul::CreateLibhangulComposer(),
@@ -780,7 +917,7 @@ void TestTextServiceShortcutAndTermination(
 
   {
     milkyway::engine::session::InputSession session(
-        registry.DefaultPhysicalLayout().id, registry.DefaultKoreanLayout().id);
+        registry.DefaultBaseLayout().id, registry.DefaultKoreanLayout().id);
     RecordingEditSink sink;
     milkyway::tsf::service::TextService service(
         &session, milkyway::adapters::libhangul::CreateLibhangulComposer(),
@@ -801,7 +938,7 @@ void TestTextServiceShortcutAndTermination(
 
   {
     milkyway::engine::session::InputSession session(
-        registry.DefaultPhysicalLayout().id, registry.DefaultKoreanLayout().id);
+        registry.DefaultBaseLayout().id, registry.DefaultKoreanLayout().id);
     RecordingEditSink sink;
     milkyway::tsf::service::TextService service(
         &session, milkyway::adapters::libhangul::CreateLibhangulComposer(),
@@ -822,7 +959,7 @@ void TestTextServiceShortcutAndTermination(
 
   {
     milkyway::engine::session::InputSession session(
-        registry.DefaultPhysicalLayout().id, registry.DefaultKoreanLayout().id);
+        registry.DefaultBaseLayout().id, registry.DefaultKoreanLayout().id);
     RecordingEditSink sink;
     milkyway::tsf::service::TextService service(
         &session, milkyway::adapters::libhangul::CreateLibhangulComposer(),
@@ -841,7 +978,7 @@ void TestTextServiceShortcutAndTermination(
 void TestTextServiceReplaceComposerForKoreanLayout(
     const milkyway::engine::layout::LayoutRegistry& registry) {
   milkyway::engine::session::InputSession session(
-      registry.DefaultPhysicalLayout().id, registry.DefaultKoreanLayout().id);
+      registry.DefaultBaseLayout().id, registry.DefaultKoreanLayout().id);
   RecordingEditSink sink;
   milkyway::tsf::service::TextService service(
       &session, milkyway::adapters::libhangul::CreateLibhangulComposer(),
@@ -849,7 +986,7 @@ void TestTextServiceReplaceComposerForKoreanLayout(
 
   assert(service.ReplaceComposer(
       milkyway::adapters::libhangul::CreateLibhangulComposer("3f")));
-  session.SetLayouts(registry.DefaultPhysicalLayout().id, "libhangul:3f");
+  session.SetLayouts(registry.DefaultBaseLayout().id, "libhangul:3f");
 
   const auto result =
       service.OnKeyEvent(Key('F'), {}, milkyway::engine::key::KeyTransition::kPressed);
@@ -864,7 +1001,7 @@ void TestTextServiceReplaceComposerForKoreanLayout(
 void TestTextServiceShiftFinalSsangSios(
     const milkyway::engine::layout::LayoutRegistry& registry) {
   milkyway::engine::session::InputSession session(
-      registry.DefaultPhysicalLayout().id, registry.DefaultKoreanLayout().id);
+      registry.DefaultBaseLayout().id, registry.DefaultKoreanLayout().id);
   RecordingEditSink sink;
   milkyway::tsf::service::TextService service(
       &session, milkyway::adapters::libhangul::CreateLibhangulComposer(),
@@ -911,7 +1048,7 @@ void TestTextServiceShiftDoubleVowels(
     const milkyway::engine::layout::LayoutRegistry& registry) {
   {
     milkyway::engine::session::InputSession session(
-        registry.DefaultPhysicalLayout().id, registry.DefaultKoreanLayout().id);
+        registry.DefaultBaseLayout().id, registry.DefaultKoreanLayout().id);
     RecordingEditSink sink;
     milkyway::tsf::service::TextService service(
         &session, milkyway::adapters::libhangul::CreateLibhangulComposer(),
@@ -932,7 +1069,7 @@ void TestTextServiceShiftDoubleVowels(
 
   {
     milkyway::engine::session::InputSession session(
-        registry.DefaultPhysicalLayout().id, registry.DefaultKoreanLayout().id);
+        registry.DefaultBaseLayout().id, registry.DefaultKoreanLayout().id);
     RecordingEditSink sink;
     milkyway::tsf::service::TextService service(
         &session, milkyway::adapters::libhangul::CreateLibhangulComposer(),
@@ -1017,7 +1154,7 @@ int main() {
 
   milkyway::engine::layout::LayoutRegistry registry;
 
-  assert(registry.DefaultPhysicalLayout().id == "us_qwerty");
+  assert(registry.DefaultBaseLayout().id == "us_qwerty");
   assert(registry.DefaultKoreanLayout().id == "libhangul:2");
 
   TestInputSession();
@@ -1027,7 +1164,9 @@ int main() {
   TestShortcutResolver(registry);
   TestLayoutRegistryEffectiveBaseLayout(registry);
   TestBuiltInKoreanLayouts(registry);
-  TestBuiltInPhysicalLayouts(registry);
+  TestBuiltInBaseLayouts(registry);
+  TestUserSettingsResolver(registry);
+  TestBaseLayoutJsonLoader(registry);
   TestTextServiceLifecycle(registry);
   TestTextServiceBaseLayoutPrintableDelimiter(registry);
   TestTextServiceBackspaceClearsVisibleComposition(registry);

@@ -4,19 +4,19 @@
 
 namespace milkyway::engine::session {
 
-InputSession::InputSession(layout::PhysicalLayoutId physical_layout_id,
+InputSession::InputSession(layout::BaseLayoutId base_layout_id,
                            layout::KoreanLayoutId korean_layout_id)
-    : physical_layout_id_(std::move(physical_layout_id)),
+    : base_layout_id_(std::move(base_layout_id)),
       korean_layout_id_(std::move(korean_layout_id)) {}
 
-void InputSession::SetLayouts(layout::PhysicalLayoutId physical_layout_id,
+void InputSession::SetLayouts(layout::BaseLayoutId base_layout_id,
                               layout::KoreanLayoutId korean_layout_id) {
-  physical_layout_id_ = std::move(physical_layout_id);
+  base_layout_id_ = std::move(base_layout_id);
   korean_layout_id_ = std::move(korean_layout_id);
 }
 
-const layout::PhysicalLayoutId& InputSession::physical_layout_id() const {
-  return physical_layout_id_;
+const layout::BaseLayoutId& InputSession::base_layout_id() const {
+  return base_layout_id_;
 }
 
 const layout::KoreanLayoutId& InputSession::korean_layout_id() const {

@@ -15,10 +15,15 @@ input label -> selected base layout inverse -> QWERTY/libhangul token -> libhang
 .\build\MilkyWayIME.Tools.KeyboardMatrix\x64\Debug\mwime_keyboard_matrix.exe matrix --base us_qwerty --korean libhangul:2
 .\build\MilkyWayIME.Tools.KeyboardMatrix\x64\Debug\mwime_keyboard_matrix.exe matrix --base colemak --korean libhangul:2
 .\build\MilkyWayIME.Tools.KeyboardMatrix\x64\Debug\mwime_keyboard_matrix.exe matrix --base us_qwerty --korean libhangul:3f
+.\build\MilkyWayIME.Tools.KeyboardMatrix\x64\Debug\mwime_keyboard_matrix.exe matrix --base-dir data\layouts\base --base colemak --korean libhangul:2
 .\build\MilkyWayIME.Tools.KeyboardMatrix\x64\Debug\mwime_keyboard_matrix.exe watch --base colemak --korean libhangul:2
 ```
 
 `--physical` is still accepted as a compatibility alias for `--base`.
+`--base-dir` loads `*.json` base layout files for development-time validation.
+Malformed files are reported and skipped independently. If multiple files
+define the same base layout ID, the later loaded definition overrides the
+earlier one, including built-in IDs.
 
 `matrix` prints a tab-separated table for alphabetic keys, digit keys, selected
 OEM keys, basic delimiter keys, shortcut checks, and a few Hangul composition

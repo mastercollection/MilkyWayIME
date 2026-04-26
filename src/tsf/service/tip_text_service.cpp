@@ -4,11 +4,15 @@
 
 #include <cstdint>
 #include <array>
+#include <exception>
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <utility>
 
+#include "engine/layout/base_layout_json_loader.h"
 #include "tsf/langbar/input_mode_lang_bar_item.h"
 #include "tsf/debug/debug_log.h"
 #include "tsf/registration/text_service_registration.h"
@@ -62,6 +66,24 @@ CreateComposerForKoreanLayout(
 
   return adapters::libhangul::CreateLibhangulComposer(
       layout->libhangul_keyboard_id);
+}
+
+std::filesystem::path UserBaseLayoutDirectory() {
+  const DWORD required = GetEnvironmentVariableW(L"APPDATA", nullptr, 0);
+  if (required == 0) {
+    return {};
+  }
+
+  std::wstring appdata(required, L'\0');
+  const DWORD length =
+      GetEnvironmentVariableW(L"APPDATA", appdata.data(), required);
+  if (length == 0 || length >= required) {
+    return {};
+  }
+
+  appdata.resize(length);
+  return std::filesystem::path(appdata) / L"MilkyWayIME" / L"layouts" /
+         L"base";
 }
 
 #if defined(_DEBUG)
@@ -146,6 +168,59 @@ const wchar_t* ShortcutActionName(engine::shortcut::ShortcutAction action) {
 
 #endif
 
+void LoadUserBaseLayouts(engine::layout::LayoutRegistry* layout_registry) {
+  if (layout_registry == nullptr) {
+    return;
+  }
+
+  const std::filesystem::path directory = UserBaseLayoutDirectory();
+  if (directory.empty()) {
+    return;
+  }
+
+  std::error_code error_code;
+  if (!std::filesystem::is_directory(directory, error_code)) {
+    return;
+  }
+
+  engine::layout::BaseLayoutDirectoryLoadResult result;
+  try {
+    result = engine::layout::LoadBaseLayoutDirectory(directory);
+  } catch (const std::exception& error) {
+#if defined(_DEBUG)
+    debug::DebugLog(L"[MilkyWayIME][LayoutLoader][Base][Exception] " +
+                    Utf8ToWide(error.what()));
+#endif
+    return;
+  }
+#if defined(_DEBUG)
+  for (const std::string& error : result.errors) {
+    debug::DebugLog(L"[MilkyWayIME][LayoutLoader][Base][Error] " +
+                    Utf8ToWide(error));
+  }
+#endif
+
+  for (auto definition : result.definitions) {
+    const std::string id = definition.layout.id;
+    const bool overrides_existing =
+        layout_registry->FindBaseLayout(id) != nullptr;
+    if (!layout_registry->AddBaseLayout(std::move(definition))) {
+#if defined(_DEBUG)
+      debug::DebugLog(L"[MilkyWayIME][LayoutLoader][Base][Skipped] id=" +
+                      Utf8ToWide(id));
+#endif
+      continue;
+    }
+#if defined(_DEBUG)
+    debug::DebugLog(
+        L"[MilkyWayIME][LayoutLoader][Base]" +
+        std::wstring(overrides_existing ? L"[Override] id="
+                                        : L"[Loaded] id=") +
+        Utf8ToWide(id));
+#endif
+  }
+}
+
 const wchar_t* EditSessionRequestPolicyName(EditSessionRequestPolicy policy) {
   switch (policy) {
     case EditSessionRequestPolicy::kKeyPathWrite:
@@ -207,19 +282,21 @@ HRESULT TipTextService::CreateInstance(IUnknown* outer, REFIID riid,
 }
 
 TipTextService::TipTextService()
-    : session_(layout_registry_.DefaultPhysicalLayout().id,
+    : session_(layout_registry_.DefaultBaseLayout().id,
                layout_registry_.DefaultKoreanLayout().id),
       edit_sink_(this),
       logic_(&session_, adapters::libhangul::CreateLibhangulComposer(),
              &edit_sink_, &layout_registry_) {
+  LoadUserBaseLayouts(&layout_registry_);
+  const settings::SettingsStore settings_store;
   const settings::UserSettings user_settings =
-      settings::LoadUserSettings(layout_registry_);
+      settings::ResolveUserSettings(settings_store.Load(), layout_registry_);
   std::unique_ptr<adapters::libhangul::HangulComposer> composer =
       CreateComposerForKoreanLayout(layout_registry_,
                                     user_settings.korean_layout_id);
   if (composer != nullptr) {
     logic_.ReplaceComposer(std::move(composer));
-    session_.SetLayouts(user_settings.physical_layout_id,
+    session_.SetLayouts(user_settings.base_layout_id,
                         user_settings.korean_layout_id);
   }
   DllAddRef();
@@ -1415,7 +1492,7 @@ engine::key::NormalizedKeyEvent TipTextService::BuildNormalizedKeyEvent(
     WPARAM wparam, LPARAM lparam,
     const engine::state::ModifierState& modifiers,
     engine::key::KeyTransition transition) const {
-  return layout_registry_.NormalizeKeyEvent(session_.physical_layout_id(),
+  return layout_registry_.NormalizeKeyEvent(session_.base_layout_id(),
                                             BuildPhysicalKey(wparam, lparam),
                                             modifiers, transition);
 }
@@ -1579,9 +1656,9 @@ const engine::layout::LayoutRegistry& TipTextService::layout_registry() const {
   return layout_registry_;
 }
 
-const engine::layout::PhysicalLayoutId&
-TipTextService::current_physical_layout_id() const {
-  return session_.physical_layout_id();
+const engine::layout::BaseLayoutId&
+TipTextService::current_base_layout_id() const {
+  return session_.base_layout_id();
 }
 
 const engine::layout::KoreanLayoutId&
@@ -1589,13 +1666,13 @@ TipTextService::current_korean_layout_id() const {
   return session_.korean_layout_id();
 }
 
-void TipTextService::SelectPhysicalLayoutFromLanguageBar(
-    const engine::layout::PhysicalLayoutId& physical_layout_id) {
-  if (layout_registry_.FindPhysicalLayout(physical_layout_id) == nullptr) {
+void TipTextService::SelectBaseLayoutFromLanguageBar(
+    const engine::layout::BaseLayoutId& base_layout_id) {
+  if (layout_registry_.FindBaseLayout(base_layout_id) == nullptr) {
     return;
   }
 
-  ApplyLayoutSelection(physical_layout_id, session_.korean_layout_id(),
+  ApplyLayoutSelection(base_layout_id, session_.korean_layout_id(),
                        L"LanguageBarBaseLayout");
 }
 
@@ -1605,14 +1682,15 @@ void TipTextService::SelectKoreanLayoutFromLanguageBar(
     return;
   }
 
-  ApplyLayoutSelection(session_.physical_layout_id(), korean_layout_id,
+  ApplyLayoutSelection(session_.base_layout_id(), korean_layout_id,
                        L"LanguageBarKoreanLayout");
 }
 
 void TipTextService::SyncLayoutSelectionFromSettings(const wchar_t* origin) {
+  const settings::SettingsStore settings_store;
   const settings::UserSettings user_settings =
-      settings::LoadUserSettings(layout_registry_);
-  if (user_settings.physical_layout_id == session_.physical_layout_id() &&
+      settings::ResolveUserSettings(settings_store.Load(), layout_registry_);
+  if (user_settings.base_layout_id == session_.base_layout_id() &&
       user_settings.korean_layout_id == session_.korean_layout_id()) {
     return;
   }
@@ -1621,21 +1699,21 @@ void TipTextService::SyncLayoutSelectionFromSettings(const wchar_t* origin) {
   debug::DebugLog(
       L"[MilkyWayIME][SyncLayoutSelectionFromSettings] origin=" +
       std::wstring(origin != nullptr ? origin : L"<unknown>") + L" previous=" +
-      Utf8ToWide(session_.physical_layout_id()) + L"/" +
+      Utf8ToWide(session_.base_layout_id()) + L"/" +
       Utf8ToWide(session_.korean_layout_id()) + L" next=" +
-      Utf8ToWide(user_settings.physical_layout_id) + L"/" +
+      Utf8ToWide(user_settings.base_layout_id) + L"/" +
       Utf8ToWide(user_settings.korean_layout_id));
 #endif
-  ApplyLayoutSelection(user_settings.physical_layout_id,
+  ApplyLayoutSelection(user_settings.base_layout_id,
                        user_settings.korean_layout_id, origin, false);
 }
 
 void TipTextService::ApplyLayoutSelection(
-    engine::layout::PhysicalLayoutId physical_layout_id,
+    engine::layout::BaseLayoutId base_layout_id,
     engine::layout::KoreanLayoutId korean_layout_id,
     const wchar_t* origin,
     bool persist_settings) {
-  if (physical_layout_id == session_.physical_layout_id() &&
+  if (base_layout_id == session_.base_layout_id() &&
       korean_layout_id == session_.korean_layout_id()) {
     return;
   }
@@ -1666,7 +1744,7 @@ void TipTextService::ApplyLayoutSelection(
     edit_sink_.ClearPendingOperations();
   }
 
-  session_.SetLayouts(std::move(physical_layout_id), std::move(korean_layout_id));
+  session_.SetLayouts(std::move(base_layout_id), std::move(korean_layout_id));
   if (replacement_composer != nullptr) {
     logic_.ReplaceComposer(std::move(replacement_composer));
   }
@@ -1674,15 +1752,16 @@ void TipTextService::ApplyLayoutSelection(
     return;
   }
 
-  const HRESULT save_hr = settings::SaveUserSettings(settings::UserSettings{
-      session_.physical_layout_id(), session_.korean_layout_id()});
+  const settings::SettingsStore settings_store;
+  const HRESULT save_hr = settings_store.Save(settings::UserSettings{
+      session_.base_layout_id(), session_.korean_layout_id()});
 #if defined(_DEBUG)
   if (FAILED(save_hr)) {
     debug::DebugLog(L"[MilkyWayIME][ApplyLayoutSelection][SaveFailed] hr=0x" +
                     FormatHex(static_cast<std::uint32_t>(save_hr)));
   } else {
-    debug::DebugLog(L"[MilkyWayIME][ApplyLayoutSelection][Saved] physical=" +
-                    Utf8ToWide(session_.physical_layout_id()) + L" korean=" +
+    debug::DebugLog(L"[MilkyWayIME][ApplyLayoutSelection][Saved] base=" +
+                    Utf8ToWide(session_.base_layout_id()) + L" korean=" +
                     Utf8ToWide(session_.korean_layout_id()));
   }
 #endif

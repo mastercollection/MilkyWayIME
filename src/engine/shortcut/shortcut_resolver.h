@@ -12,7 +12,7 @@ enum class ShortcutAction {
 };
 
 struct ShortcutQuery {
-  layout::PhysicalLayoutId physical_layout;
+  layout::BaseLayoutId base_layout_id;
   state::ModifierState modifiers;
   key::LayoutKey input_label_key = key::LayoutKey::kUnknown;
 };

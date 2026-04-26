@@ -24,13 +24,13 @@ enum class CompositionEndReason {
 
 class InputSession {
  public:
-  InputSession(layout::PhysicalLayoutId physical_layout_id,
+  InputSession(layout::BaseLayoutId base_layout_id,
                layout::KoreanLayoutId korean_layout_id);
 
-  void SetLayouts(layout::PhysicalLayoutId physical_layout_id,
+  void SetLayouts(layout::BaseLayoutId base_layout_id,
                   layout::KoreanLayoutId korean_layout_id);
 
-  const layout::PhysicalLayoutId& physical_layout_id() const;
+  const layout::BaseLayoutId& base_layout_id() const;
   const layout::KoreanLayoutId& korean_layout_id() const;
 
   void StartComposition(std::string preedit);
@@ -44,7 +44,7 @@ class InputSession {
   std::optional<hanja::CandidateRequest> RequestHanjaConversion() const;
 
  private:
-  layout::PhysicalLayoutId physical_layout_id_;
+  layout::BaseLayoutId base_layout_id_;
   layout::KoreanLayoutId korean_layout_id_;
   bool is_composing_ = false;
   composition::CompositionSnapshot snapshot_;

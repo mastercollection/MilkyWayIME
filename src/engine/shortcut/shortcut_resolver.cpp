@@ -3,7 +3,7 @@
 namespace milkyway::engine::shortcut {
 
 ShortcutAction ShortcutResolver::Resolve(const ShortcutQuery& query) const {
-  if (query.physical_layout.empty()) {
+  if (query.base_layout_id.empty()) {
     return ShortcutAction::kNone;
   }
 

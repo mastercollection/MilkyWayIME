@@ -16,7 +16,7 @@ namespace milkyway::tsf::settings {
 namespace {
 
 constexpr wchar_t kSettingsKey[] = L"Software\\MilkyWayIME\\Settings";
-constexpr wchar_t kPhysicalLayoutValue[] = L"BaseLayoutId";
+constexpr wchar_t kBaseLayoutValue[] = L"BaseLayoutId";
 constexpr wchar_t kKoreanLayoutValue[] = L"KoreanLayoutId";
 
 std::wstring Utf8ToWide(std::string_view value) {
@@ -97,29 +97,18 @@ HRESULT WriteStringValue(HKEY key, const wchar_t* value_name,
 
 }  // namespace
 
-UserSettings LoadUserSettings(
-    const engine::layout::LayoutRegistry& layout_registry) {
-  UserSettings settings{layout_registry.DefaultPhysicalLayout().id,
-                        layout_registry.DefaultKoreanLayout().id};
-
-  if (const auto value = ReadStringValue(kPhysicalLayoutValue)) {
-    const std::string id = WideToUtf8(*value);
-    if (layout_registry.FindPhysicalLayout(id) != nullptr) {
-      settings.physical_layout_id = id;
-    }
+RawUserSettings SettingsStore::Load() const {
+  RawUserSettings settings;
+  if (const auto value = ReadStringValue(kBaseLayoutValue)) {
+    settings.base_layout_id = WideToUtf8(*value);
   }
-
   if (const auto value = ReadStringValue(kKoreanLayoutValue)) {
-    const std::string id = WideToUtf8(*value);
-    if (layout_registry.FindKoreanLayout(id) != nullptr) {
-      settings.korean_layout_id = id;
-    }
+    settings.korean_layout_id = WideToUtf8(*value);
   }
-
   return settings;
 }
 
-HRESULT SaveUserSettings(const UserSettings& settings) {
+HRESULT SettingsStore::Save(const UserSettings& settings) const {
   HKEY key = nullptr;
   const LONG create_result =
       RegCreateKeyExW(HKEY_CURRENT_USER, kSettingsKey, 0, nullptr, 0,
@@ -128,14 +117,34 @@ HRESULT SaveUserSettings(const UserSettings& settings) {
     return HRESULT_FROM_WIN32(create_result);
   }
 
-  HRESULT hr = WriteStringValue(key, kPhysicalLayoutValue,
-                                settings.physical_layout_id);
+  HRESULT hr = WriteStringValue(key, kBaseLayoutValue,
+                                settings.base_layout_id);
   if (SUCCEEDED(hr)) {
     hr = WriteStringValue(key, kKoreanLayoutValue, settings.korean_layout_id);
   }
 
   RegCloseKey(key);
   return hr;
+}
+
+UserSettings ResolveUserSettings(
+    const RawUserSettings& raw_settings,
+    const engine::layout::LayoutRegistry& layout_registry) {
+  UserSettings settings{layout_registry.DefaultBaseLayout().id,
+                        layout_registry.DefaultKoreanLayout().id};
+
+  if (raw_settings.base_layout_id.has_value() &&
+      layout_registry.FindBaseLayout(*raw_settings.base_layout_id) != nullptr) {
+    settings.base_layout_id = *raw_settings.base_layout_id;
+  }
+
+  if (raw_settings.korean_layout_id.has_value() &&
+      layout_registry.FindKoreanLayout(*raw_settings.korean_layout_id) !=
+          nullptr) {
+    settings.korean_layout_id = *raw_settings.korean_layout_id;
+  }
+
+  return settings;
 }
 
 }  // namespace milkyway::tsf::settings

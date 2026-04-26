@@ -83,8 +83,8 @@ std::wstring LayoutLabel(std::string_view display_name, std::string_view id) {
 }
 
 HMENU BuildBaseLayoutSubmenu(
-    const std::vector<engine::layout::PhysicalLayout>& layouts,
-    const engine::layout::PhysicalLayoutId& current_id) {
+    const std::vector<engine::layout::BaseLayout>& layouts,
+    const engine::layout::BaseLayoutId& current_id) {
   HMENU menu = CreatePopupMenu();
   if (menu == nullptr) {
     return nullptr;
@@ -321,8 +321,8 @@ STDMETHODIMP InputModeLangBarItem::OnClick(TfLBIClick click, POINT point,
   AppendSeparator(menu);
 
   HMENU base_layout_menu =
-      BuildBaseLayoutSubmenu(host_->layout_registry().physical_layouts(),
-                             host_->current_physical_layout_id());
+      BuildBaseLayoutSubmenu(host_->layout_registry().base_layouts(),
+                             host_->current_base_layout_id());
   if (base_layout_menu != nullptr &&
       !AppendMenuString(menu, reinterpret_cast<UINT_PTR>(base_layout_menu),
                         MF_POPUP, L"키보드 배열")) {
@@ -391,9 +391,9 @@ STDMETHODIMP InputModeLangBarItem::OnMenuSelect(UINT menu_id) {
   if (menu_id >= kMenuBaseLayoutStart &&
       menu_id < kMenuBaseLayoutStart + 1000) {
     const std::size_t index = menu_id - kMenuBaseLayoutStart;
-    const auto& layouts = host_->layout_registry().physical_layouts();
+    const auto& layouts = host_->layout_registry().base_layouts();
     if (index < layouts.size()) {
-      host_->SelectPhysicalLayoutFromLanguageBar(layouts[index].id);
+      host_->SelectBaseLayoutFromLanguageBar(layouts[index].id);
     }
     return S_OK;
   }

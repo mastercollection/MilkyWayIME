@@ -16,11 +16,15 @@ MilkyWayIME starts from four explicit boundaries:
 - Folder boundaries under `src/` remain the source of truth for subsystem ownership.
 - Built-in layout definitions belong in engine-owned data tables, not TSF classes.
   `data/layouts` remains the schema/sample home for future custom layout files.
+- User settings persist selected IDs only: `BaseLayoutId` and `KoreanLayoutId`.
+  Settings do not store base layout mappings or libhangul XML contents.
 - Hanja conversion requests must operate on the current composing syllable only.
 - `base layout` means the user's current key-label arrangement as seen through Windows/TSF input labels. It is not a raw hardware switch matrix.
 - TSF key events are normalized first to an `input_label_key`. Shortcuts are resolved from that input label and modifier state.
 - Hangul composition uses the selected base layout's inverse map to convert the input label into the fixed QWERTY/libhangul token before forwarding input to `libhangul`.
 - `Shift` is part of the Hangul token only for Korean composition. It must not leak into shortcut modifier handling.
+- Future custom Korean layouts use libhangul XML directly and resolve through
+  `libhangul:<xml-id>`. Future custom base layouts use MilkyWayIME JSON.
 
 ## Build Baseline
 
@@ -30,4 +34,4 @@ MilkyWayIME starts from four explicit boundaries:
 - `MilkyWayIME.sln` is the source of truth for local development builds.
 - The solution contains one production DLL project: `MilkyWayIME.Tsf`.
 - `MilkyWayIME.Internal` exists only to share repo-owned implementation code across the DLL and test projects.
-- The TSF DLL owns the minimal language bar settings menu and HKCU settings persistence. A future full settings UI, if added, should be a separate project instead of stretching the TSF DLL boundary.
+- The TSF DLL owns the minimal language bar settings menu and HKCU settings persistence. The TSF-facing code should use a settings store/resolver boundary rather than reading registry values directly. A future full settings UI, if added, should be a separate project instead of stretching the TSF DLL boundary.

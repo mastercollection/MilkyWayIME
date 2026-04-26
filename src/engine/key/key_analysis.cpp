@@ -88,17 +88,17 @@ KeyCategory Classify(const NormalizedKeyEvent& event,
 }  // namespace
 
 KeyAnalysis AnalyzeKeyEvent(const layout::LayoutRegistry& layout_registry,
-                            const layout::PhysicalLayoutId& physical_layout_id,
+                            const layout::BaseLayoutId& base_layout_id,
                             const layout::KoreanLayoutId& korean_layout_id,
                             const PhysicalKey& key,
                             const state::ModifierState& modifiers,
                             KeyTransition transition) {
   KeyAnalysis analysis;
   analysis.event = layout_registry.NormalizeKeyEvent(
-      physical_layout_id, key, modifiers, transition);
+      base_layout_id, key, modifiers, transition);
   analysis.input_label_key = analysis.event.input_label_key;
   analysis.hangul_token_key = layout_registry.ResolveHangulTokenKey(
-      physical_layout_id, analysis.input_label_key);
+      base_layout_id, analysis.input_label_key);
   analysis.hangul_input = layout_registry.ResolveHangulInput(
       korean_layout_id, layout::HangulMappingKey{
                             analysis.hangul_token_key,
@@ -109,7 +109,7 @@ KeyAnalysis AnalyzeKeyEvent(const layout::LayoutRegistry& layout_registry,
   if (analysis.category == KeyCategory::kModifiedShortcut) {
     shortcut::ShortcutResolver resolver;
     analysis.shortcut_action = resolver.Resolve(shortcut::ShortcutQuery{
-        physical_layout_id, modifiers, analysis.input_label_key});
+        base_layout_id, modifiers, analysis.input_label_key});
   }
 
   return analysis;

@@ -11,33 +11,39 @@ namespace milkyway::engine::layout {
 
 class LayoutRegistry {
  public:
-  LayoutRegistry() = default;
+  LayoutRegistry();
 
-  const std::vector<PhysicalLayout>& physical_layouts() const;
+  const std::vector<BaseLayout>& base_layouts() const;
   const std::vector<KoreanLayoutMapping>& korean_layouts() const;
 
-  const PhysicalLayout& DefaultPhysicalLayout() const;
+  bool AddBaseLayout(BaseLayoutDefinition definition);
+
+  const BaseLayout& DefaultBaseLayout() const;
   const KoreanLayoutMapping& DefaultKoreanLayout() const;
-  const PhysicalLayout* FindPhysicalLayout(
-      const PhysicalLayoutId& id) const;
+  const BaseLayout* FindBaseLayout(
+      const BaseLayoutId& id) const;
   const KoreanLayoutMapping* FindKoreanLayout(const KoreanLayoutId& id) const;
   std::string ResolveLibhangulKeyboardId(
       const KoreanLayoutId& korean_layout_id) const;
   key::LayoutKey ResolveInputLabelKey(const key::PhysicalKey& key) const;
   key::LayoutKey ResolveBaseLayoutLabelKey(
-      const PhysicalLayoutId& physical_layout_id,
+      const BaseLayoutId& base_layout_id,
       key::LayoutKey token_key) const;
   key::LayoutKey ResolveHangulTokenKey(
-      const PhysicalLayoutId& physical_layout_id,
+      const BaseLayoutId& base_layout_id,
       key::LayoutKey input_label_key) const;
   key::NormalizedKeyEvent NormalizeKeyEvent(
-      const PhysicalLayoutId& physical_layout_id,
+      const BaseLayoutId& base_layout_id,
       const key::PhysicalKey& key,
       const state::ModifierState& modifiers,
       key::KeyTransition transition) const;
   ResolvedHangulInput ResolveHangulInput(
       const KoreanLayoutId& korean_layout_id,
       const HangulMappingKey& key) const;
+
+ private:
+  std::vector<BaseLayoutDefinition> base_layout_definitions_;
+  std::vector<BaseLayout> base_layouts_;
 };
 
 }  // namespace milkyway::engine::layout

@@ -139,15 +139,15 @@ class TipTextService final : public ITfTextInputProcessorEx,
                                   TfEditCookie read_cookie) const;
   void SetImeOpen(bool open);
   const engine::layout::LayoutRegistry& layout_registry() const;
-  const engine::layout::PhysicalLayoutId& current_physical_layout_id() const;
+  const engine::layout::BaseLayoutId& current_base_layout_id() const;
   const engine::layout::KoreanLayoutId& current_korean_layout_id() const;
-  void SelectPhysicalLayoutFromLanguageBar(
-      const engine::layout::PhysicalLayoutId& physical_layout_id);
+  void SelectBaseLayoutFromLanguageBar(
+      const engine::layout::BaseLayoutId& base_layout_id);
   void SelectKoreanLayoutFromLanguageBar(
       const engine::layout::KoreanLayoutId& korean_layout_id);
   void SyncLayoutSelectionFromSettings(const wchar_t* origin);
   void ApplyLayoutSelection(
-      engine::layout::PhysicalLayoutId physical_layout_id,
+      engine::layout::BaseLayoutId base_layout_id,
       engine::layout::KoreanLayoutId korean_layout_id,
       const wchar_t* origin,
       bool persist_settings = true);

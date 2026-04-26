@@ -59,9 +59,54 @@ The supported built-in base layouts are `us_qwerty` and `colemak`. Korean
 layouts use `libhangul:<id>` IDs such as `libhangul:2` and `libhangul:3f`.
 The selected layouts are stored under
 `HKCU\Software\MilkyWayIME\Settings` and loaded when the text service starts.
+Only the selected IDs are persisted:
+
+```text
+BaseLayoutId
+KoreanLayoutId
+```
+
+Layout definitions, libhangul XML, and mapping tables are not copied into the
+settings store.
 
 There is no dedicated settings window yet, and `Ctrl+Alt+O` is intentionally not
 registered as a settings shortcut.
+
+## Custom Layout Formats
+
+Future custom Korean layouts should be written as libhangul XML, not as
+MilkyWayIME JSON. The XML `id` becomes the MilkyWayIME Korean layout ID through
+the `libhangul:<id>` form; for example, XML `id="my-sebeol"` becomes
+`libhangul:my-sebeol`.
+
+Future custom base layouts should use MilkyWayIME JSON under the same direction
+as the built-in samples:
+
+```json
+{
+  "id": "my_colemak_variant",
+  "displayName": "내 콜맥 변형",
+  "keys": {
+    "s": "r"
+  }
+}
+```
+
+The base JSON loader is connected to unit tests, the `keyboard-matrix`
+development tool, and the TSF runtime. The TSF runtime loads base layout JSON
+once when the text service is created from:
+
+```text
+%APPDATA%\MilkyWayIME\layouts\base
+```
+
+Malformed files are skipped independently. Duplicate base layout IDs override
+earlier definitions, including built-in IDs. Existing TSF instances do not
+reload JSON automatically; restart the target app after changing layout files.
+
+Current builds still compile `external/libhangul` with `ExternalKeyboard=NO`
+and `ENABLE_EXTERNAL_KEYBOARDS=0`, so runtime custom Korean XML loading remains
+a separate future step.
 
 ## Initial Layout
 

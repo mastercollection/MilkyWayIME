@@ -26,7 +26,7 @@ struct KeyAnalysis {
 };
 
 KeyAnalysis AnalyzeKeyEvent(const layout::LayoutRegistry& layout_registry,
-                            const layout::PhysicalLayoutId& physical_layout_id,
+                            const layout::BaseLayoutId& base_layout_id,
                             const layout::KoreanLayoutId& korean_layout_id,
                             const PhysicalKey& key,
                             const state::ModifierState& modifiers,

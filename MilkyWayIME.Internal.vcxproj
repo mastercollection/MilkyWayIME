@@ -42,6 +42,7 @@
   <ItemGroup>
     <ClCompile Include="src\adapters\libhangul\libhangul_composer.cpp" />
     <ClCompile Include="src\engine\key\key_analysis.cpp" />
+    <ClCompile Include="src\engine\layout\base_layout_json_loader.cpp" />
     <ClCompile Include="src\engine\layout\layout_registry.cpp" />
     <ClCompile Include="src\engine\session\input_session.cpp" />
     <ClCompile Include="src\engine\shortcut\shortcut_resolver.cpp" />
@@ -64,6 +65,7 @@
     <ClInclude Include="src\engine\key\key_analysis.h" />
     <ClInclude Include="src\engine\key\normalized_key_event.h" />
     <ClInclude Include="src\engine\key\physical_key.h" />
+    <ClInclude Include="src\engine\layout\base_layout_json_loader.h" />
     <ClInclude Include="src\engine\layout\layout_registry.h" />
     <ClInclude Include="src\engine\layout\layout_types.h" />
     <ClInclude Include="src\engine\session\input_session.h" />

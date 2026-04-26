@@ -2,22 +2,12 @@
 
 #include <cstddef>
 #include <iterator>
+#include <utility>
 
 #include "engine/key/layout_key.h"
 
 namespace milkyway::engine::layout {
 namespace {
-
-struct LayoutKeyMapping {
-  key::LayoutKey token_key;
-  key::LayoutKey label_key;
-};
-
-struct PhysicalLayoutMapping {
-  PhysicalLayout layout;
-  const LayoutKeyMapping* mappings = nullptr;
-  std::size_t mapping_count = 0;
-};
 
 constexpr LayoutKeyMapping kColemakMappings[] = {
     {key::LayoutKey::kE, key::LayoutKey::kF},
@@ -39,25 +29,19 @@ constexpr LayoutKeyMapping kColemakMappings[] = {
     {key::LayoutKey::kN, key::LayoutKey::kK},
 };
 
-const PhysicalLayoutMapping kPhysicalLayoutMappings[] = {
-    {{"us_qwerty", "미국식 쿼티",
-      PhysicalLayoutInterpretation::kEffectiveBaseLayout},
-     nullptr, 0},
-    {{"colemak", "콜맥",
-      PhysicalLayoutInterpretation::kEffectiveBaseLayout},
-     kColemakMappings, std::size(kColemakMappings)},
-};
-
-std::vector<PhysicalLayout> BuildPhysicalLayouts() {
-  std::vector<PhysicalLayout> layouts;
-  layouts.reserve(std::size(kPhysicalLayoutMappings));
-  for (const PhysicalLayoutMapping& mapping : kPhysicalLayoutMappings) {
-    layouts.push_back(mapping.layout);
-  }
-  return layouts;
+std::vector<BaseLayoutDefinition> BuildBuiltInBaseLayoutDefinitions() {
+  std::vector<BaseLayoutDefinition> definitions;
+  definitions.push_back(BaseLayoutDefinition{
+      {"us_qwerty", "미국식 쿼티",
+       BaseLayoutInterpretation::kEffectiveBaseLayout},
+      {}});
+  definitions.push_back(BaseLayoutDefinition{
+      {"colemak", "콜맥",
+       BaseLayoutInterpretation::kEffectiveBaseLayout},
+      std::vector<LayoutKeyMapping>(std::begin(kColemakMappings),
+                                    std::end(kColemakMappings))});
+  return definitions;
 }
-
-const std::vector<PhysicalLayout> kPhysicalLayouts = BuildPhysicalLayouts();
 
 const std::vector<KoreanLayoutMapping> kKoreanLayouts = {
     {"libhangul:2", "두벌식", "2", false},
@@ -147,37 +131,54 @@ constexpr key::LayoutKey kTokenKeys[] = {
     key::LayoutKey::kOemPeriod,
 };
 
-const PhysicalLayoutMapping* FindPhysicalLayoutMapping(
-    const PhysicalLayoutId& physical_layout_id) {
-  for (const PhysicalLayoutMapping& mapping : kPhysicalLayoutMappings) {
-    if (mapping.layout.id == physical_layout_id) {
-      return &mapping;
-    }
-  }
-  return nullptr;
-}
-
 }  // namespace
 
-const std::vector<PhysicalLayout>& LayoutRegistry::physical_layouts() const {
-  return kPhysicalLayouts;
+LayoutRegistry::LayoutRegistry()
+    : base_layout_definitions_(BuildBuiltInBaseLayoutDefinitions()) {
+  base_layouts_.reserve(base_layout_definitions_.size());
+  for (const BaseLayoutDefinition& definition : base_layout_definitions_) {
+    base_layouts_.push_back(definition.layout);
+  }
+}
+
+const std::vector<BaseLayout>& LayoutRegistry::base_layouts() const {
+  return base_layouts_;
 }
 
 const std::vector<KoreanLayoutMapping>& LayoutRegistry::korean_layouts() const {
   return kKoreanLayouts;
 }
 
-const PhysicalLayout& LayoutRegistry::DefaultPhysicalLayout() const {
-  return kPhysicalLayouts.front();
+bool LayoutRegistry::AddBaseLayout(BaseLayoutDefinition definition) {
+  if (definition.layout.id.empty()) {
+    return false;
+  }
+
+  for (std::size_t index = 0; index < base_layout_definitions_.size();
+       ++index) {
+    if (base_layout_definitions_[index].layout.id == definition.layout.id) {
+      base_layouts_[index] = definition.layout;
+      base_layout_definitions_[index] = std::move(definition);
+      return true;
+    }
+  }
+
+  base_layouts_.push_back(definition.layout);
+  base_layout_definitions_.push_back(std::move(definition));
+  return true;
+}
+
+const BaseLayout& LayoutRegistry::DefaultBaseLayout() const {
+  return base_layouts_.front();
 }
 
 const KoreanLayoutMapping& LayoutRegistry::DefaultKoreanLayout() const {
   return kKoreanLayouts.front();
 }
 
-const PhysicalLayout* LayoutRegistry::FindPhysicalLayout(
-    const PhysicalLayoutId& id) const {
-  for (const PhysicalLayout& layout : kPhysicalLayouts) {
+const BaseLayout* LayoutRegistry::FindBaseLayout(
+    const BaseLayoutId& id) const {
+  for (const BaseLayout& layout : base_layouts_) {
     if (layout.id == id) {
       return &layout;
     }
@@ -213,28 +214,29 @@ key::LayoutKey LayoutRegistry::ResolveInputLabelKey(
 }
 
 key::LayoutKey LayoutRegistry::ResolveBaseLayoutLabelKey(
-    const PhysicalLayoutId& physical_layout_id,
+    const BaseLayoutId& base_layout_id,
     key::LayoutKey token_key) const {
-  const PhysicalLayoutMapping* layout_mapping =
-      FindPhysicalLayoutMapping(physical_layout_id);
-  if (layout_mapping == nullptr) {
+  for (const BaseLayoutDefinition& definition : base_layout_definitions_) {
+    if (definition.layout.id != base_layout_id) {
+      continue;
+    }
+
+    for (const LayoutKeyMapping& mapping : definition.mappings) {
+      if (mapping.token_key == token_key) {
+        return mapping.label_key;
+      }
+    }
     return token_key;
   }
 
-  for (std::size_t index = 0; index < layout_mapping->mapping_count; ++index) {
-    const LayoutKeyMapping& mapping = layout_mapping->mappings[index];
-    if (mapping.token_key == token_key) {
-      return mapping.label_key;
-    }
-  }
   return token_key;
 }
 
 key::LayoutKey LayoutRegistry::ResolveHangulTokenKey(
-    const PhysicalLayoutId& physical_layout_id,
+    const BaseLayoutId& base_layout_id,
     key::LayoutKey input_label_key) const {
   for (const key::LayoutKey token_key : kTokenKeys) {
-    if (ResolveBaseLayoutLabelKey(physical_layout_id, token_key) ==
+    if (ResolveBaseLayoutLabelKey(base_layout_id, token_key) ==
         input_label_key) {
       return token_key;
     }
@@ -244,10 +246,10 @@ key::LayoutKey LayoutRegistry::ResolveHangulTokenKey(
 }
 
 key::NormalizedKeyEvent LayoutRegistry::NormalizeKeyEvent(
-    const PhysicalLayoutId& physical_layout_id, const key::PhysicalKey& key,
+    const BaseLayoutId& base_layout_id, const key::PhysicalKey& key,
     const state::ModifierState& modifiers,
     key::KeyTransition transition) const {
-  (void)physical_layout_id;
+  (void)base_layout_id;
   key::NormalizedKeyEvent event;
   event.key = key;
   event.modifiers = modifiers;

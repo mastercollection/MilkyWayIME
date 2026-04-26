@@ -1,23 +1,34 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 #include "engine/key/layout_key.h"
 
 namespace milkyway::engine::layout {
 
-using PhysicalLayoutId = std::string;
+using BaseLayoutId = std::string;
 using KoreanLayoutId = std::string;
 
-enum class PhysicalLayoutInterpretation {
+enum class BaseLayoutInterpretation {
   kEffectiveBaseLayout,
 };
 
-struct PhysicalLayout {
-  PhysicalLayoutId id;
+struct BaseLayout {
+  BaseLayoutId id;
   std::string display_name;
-  PhysicalLayoutInterpretation interpretation =
-      PhysicalLayoutInterpretation::kEffectiveBaseLayout;
+  BaseLayoutInterpretation interpretation =
+      BaseLayoutInterpretation::kEffectiveBaseLayout;
+};
+
+struct LayoutKeyMapping {
+  key::LayoutKey token_key;
+  key::LayoutKey label_key;
+};
+
+struct BaseLayoutDefinition {
+  BaseLayout layout;
+  std::vector<LayoutKeyMapping> mappings;
 };
 
 struct KoreanLayoutMapping {

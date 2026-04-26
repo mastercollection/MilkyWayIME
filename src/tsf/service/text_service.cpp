@@ -216,7 +216,7 @@ engine::key::KeyAnalysis TextService::AnalyzeKeyEvent(
   }
 
   return engine::key::AnalyzeKeyEvent(*layout_registry_,
-                                      session_->physical_layout_id(),
+                                      session_->base_layout_id(),
                                       session_->korean_layout_id(), key,
                                       modifiers, transition);
 }

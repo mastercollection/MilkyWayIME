@@ -1,6 +1,7 @@
 #include <windows.h>
 
 #include <cstdint>
+#include <filesystem>
 #include <iomanip>
 #include <iostream>
 #include <memory>
@@ -13,6 +14,7 @@
 #include "engine/key/layout_key.h"
 #include "engine/key/key_analysis.h"
 #include "engine/key/physical_key.h"
+#include "engine/layout/base_layout_json_loader.h"
 #include "engine/layout/layout_registry.h"
 #include "engine/shortcut/shortcut_resolver.h"
 #include "engine/state/modifier_state.h"
@@ -32,7 +34,8 @@ using milkyway::engine::state::ModifierState;
 
 struct Options {
   std::string mode;
-  std::string physical_layout = "us_qwerty";
+  std::string base_layout = "us_qwerty";
+  std::string base_layout_directory;
   std::string korean_layout = "libhangul:2";
   bool help = false;
 };
@@ -198,7 +201,7 @@ std::string PreviewSingleHangul(const LayoutRegistry& registry,
 
 KeyAnalysis Analyze(const LayoutRegistry& registry, const Options& options,
                     const KeySpec& key) {
-  return AnalyzeKeyEvent(registry, options.physical_layout,
+  return AnalyzeKeyEvent(registry, options.base_layout,
                          options.korean_layout,
                          MakePhysicalKey(key.virtual_key, key.extended),
                          key.modifiers, KeyTransition::kPressed);
@@ -279,8 +282,8 @@ void PrintSequenceRow(const LayoutRegistry& registry, const Options& options,
 void PrintUsage() {
   std::cout
       << "Usage:\n"
-      << "  mwime_keyboard_matrix.exe matrix [--base ID] [--korean ID]\n"
-      << "  mwime_keyboard_matrix.exe watch  [--base ID] [--korean ID]\n";
+      << "  mwime_keyboard_matrix.exe matrix [--base ID] [--base-dir DIR] [--korean ID]\n"
+      << "  mwime_keyboard_matrix.exe watch  [--base ID] [--base-dir DIR] [--korean ID]\n";
 }
 
 Options ParseArgs(int argc, char** argv) {
@@ -299,7 +302,9 @@ Options ParseArgs(int argc, char** argv) {
   for (int index = 2; index < argc; ++index) {
     const std::string arg = argv[index];
     if ((arg == "--base" || arg == "--physical") && index + 1 < argc) {
-      options.physical_layout = argv[++index];
+      options.base_layout = argv[++index];
+    } else if (arg == "--base-dir" && index + 1 < argc) {
+      options.base_layout_directory = argv[++index];
     } else if (arg == "--korean" && index + 1 < argc) {
       options.korean_layout = argv[++index];
     } else if (arg == "-h" || arg == "--help") {
@@ -312,11 +317,40 @@ Options ParseArgs(int argc, char** argv) {
   return options;
 }
 
+bool LoadBaseLayouts(LayoutRegistry* registry, const Options& options) {
+  if (registry == nullptr || options.base_layout_directory.empty()) {
+    return true;
+  }
+
+  const auto load_result =
+      milkyway::engine::layout::LoadBaseLayoutDirectory(
+          options.base_layout_directory);
+  if (!load_result.errors.empty()) {
+    for (const std::string& error : load_result.errors) {
+      std::cerr << error << '\n';
+    }
+  }
+
+  for (auto definition : load_result.definitions) {
+    const std::string id = definition.layout.id;
+    const bool overrides_existing = registry->FindBaseLayout(id) != nullptr;
+    if (!registry->AddBaseLayout(std::move(definition))) {
+      std::cerr << "Skipping invalid base layout id: " << id << '\n';
+      continue;
+    }
+    if (overrides_existing) {
+      std::cerr << "Overriding base layout id: " << id << '\n';
+    }
+  }
+
+  return true;
+}
+
 bool ValidateLayouts(const LayoutRegistry& registry, const Options& options) {
-  if (registry.FindPhysicalLayout(options.physical_layout) == nullptr) {
-    std::cerr << "Unknown base layout: " << options.physical_layout << '\n';
+  if (registry.FindBaseLayout(options.base_layout) == nullptr) {
+    std::cerr << "Unknown base layout: " << options.base_layout << '\n';
     std::cerr << "Available base layouts:";
-    for (const auto& layout : registry.physical_layouts()) {
+    for (const auto& layout : registry.base_layouts()) {
       std::cerr << ' ' << layout.id;
     }
     std::cerr << '\n';
@@ -337,7 +371,7 @@ bool ValidateLayouts(const LayoutRegistry& registry, const Options& options) {
 }
 
 int RunMatrix(const LayoutRegistry& registry, const Options& options) {
-  std::cout << "base_layout=" << options.physical_layout
+  std::cout << "base_layout=" << options.base_layout
             << " korean=" << options.korean_layout << '\n';
   std::cout << "key\tvk\tscan\text\tmodifier\tinput_label_key"
                "\thangul_token_key\thangul_ascii"
@@ -446,7 +480,7 @@ int RunWatch(const LayoutRegistry& registry, const Options& options) {
   }
 
   std::cout << "Watching keys. Press Esc to exit.\n";
-  std::cout << "base_layout=" << options.physical_layout
+  std::cout << "base_layout=" << options.base_layout
             << " korean=" << options.korean_layout << '\n';
 
   for (;;) {
@@ -474,7 +508,7 @@ int RunWatch(const LayoutRegistry& registry, const Options& options) {
         (key_event.dwControlKeyState & ENHANCED_KEY) != 0};
 
     const KeyAnalysis analysis =
-        AnalyzeKeyEvent(registry, options.physical_layout, options.korean_layout,
+        AnalyzeKeyEvent(registry, options.base_layout, options.korean_layout,
                         physical_key, modifiers, KeyTransition::kPressed);
 
     std::string commit;
@@ -528,6 +562,9 @@ int main(int argc, char** argv) {
   }
 
   LayoutRegistry registry;
+  if (!LoadBaseLayouts(&registry, options)) {
+    return 1;
+  }
   if (!ValidateLayouts(registry, options)) {
     return 1;
   }
