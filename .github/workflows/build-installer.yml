@@ -115,7 +115,15 @@ jobs:
 
           "Using MSBuild: $msbuild"
           "Using MSVC tools: $($v145Tools.FullName)"
-          & (Join-Path $v145Tools.FullName "bin\Hostx64\x64\cl.exe") /Bv
+
+          $cl = Join-Path $v145Tools.FullName "bin\Hostx64\x64\cl.exe"
+          $probeSource = Join-Path $env:RUNNER_TEMP "milkyway_cl_version_probe.cpp"
+          $probeObject = Join-Path $env:RUNNER_TEMP "milkyway_cl_version_probe.obj"
+          Set-Content -LiteralPath $probeSource -Value "int main() { return 0; }" -Encoding ascii
+          & $cl /nologo /Bv /c $probeSource "/Fo$probeObject"
+          if ($LASTEXITCODE -ne 0) {
+            throw "cl.exe version probe failed with exit code $LASTEXITCODE."
+          }
 
       - name: Build Release x64 MSI
         shell: pwsh
