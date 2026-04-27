@@ -91,7 +91,7 @@ jobs:
           foreach ($path in $installPaths) {
             $msvcRoot = Join-Path $path "VC\Tools\MSVC"
             if (Test-Path -LiteralPath $msvcRoot) {
-              "MSVC toolsets under $path:"
+              "MSVC toolsets under ${path}:"
               Get-ChildItem $msvcRoot -Directory |
                 Sort-Object Name -Descending |
                 ForEach-Object { "  $($_.Name)  $($_.FullName)" }
