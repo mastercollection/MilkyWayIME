@@ -7,7 +7,9 @@
 #include <utility>
 #include <vector>
 
+#if defined(_DEBUG)
 #include "tsf/debug/debug_log.h"
+#endif
 #include "tsf/edit/text_edit_plan.h"
 #include "tsf/service/tip_text_service.h"
 

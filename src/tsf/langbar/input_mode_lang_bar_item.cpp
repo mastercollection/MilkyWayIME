@@ -12,7 +12,9 @@
 
 #include "tsf/registration/text_service_registration.h"
 #include "tsf/resources/resource.h"
+#if defined(_DEBUG)
 #include "tsf/debug/debug_log.h"
+#endif
 #include "tsf/service/module_state.h"
 #include "tsf/service/tip_text_service.h"
 #include "tsf/settings/user_layout_paths.h"

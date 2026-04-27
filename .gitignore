@@ -1,9 +1,9 @@
 .vs/
 build/
 installer/obj/
-x64/
-Debug/
-Release/
+/x64/
+/Debug/
+/Release/
 references/
 *.user
 *.suo
