@@ -4,8 +4,8 @@ Installer and registration packaging assets belong here.
 
 The first installer target is an x64 WiX v6 MSI. It installs the Release TSF
 DLL under `%ProgramFiles%\MilkyWayIME`, installs the binary libhangul Hanja
-cache files under `data\hanja`, and installs base layout JSON samples under
-`data\layouts\base`.
+cache files under `%ProgramData%\MilkyWayIME\data\hanja`, and installs base
+layout JSON samples under `%ProgramFiles%\MilkyWayIME\data\layouts\base`.
 
 Build it from the repository root with:
 
@@ -58,14 +58,15 @@ registration. `DllUnregisterServer` removes those registrations.
 Current packaged files:
 
 - `build\MilkyWayIME.Tsf\x64\Release\mwime_tsf.dll`
-- `external\libhangul\data\hanja\hanja.bin` as `data\hanja\hanja.bin`
-- `external\libhangul\data\hanja\mssymbol.bin` as `data\hanja\mssymbol.bin`
+- `external\libhangul\data\hanja\hanja.bin` as `%ProgramData%\MilkyWayIME\data\hanja\hanja.bin`
+- `external\libhangul\data\hanja\mssymbol.bin` as `%ProgramData%\MilkyWayIME\data\hanja\mssymbol.bin`
 - `data\layouts\base\us_qwerty.json` as `data\layouts\base\us_qwerty.json`
 - `data\layouts\base\colemak.json` as `data\layouts\base\colemak.json`
 
-The runtime lookup path is relative to the installed TSF DLL directory first.
-The runtime loads binary cache files only; text sources are development inputs
-for regenerating those binary caches.
+The runtime lookup path prefers `%ProgramData%\MilkyWayIME\data\hanja`, then
+falls back to the legacy DLL-adjacent `data\hanja` path, then to the development
+source tree. The runtime loads binary cache files only; text sources are
+development inputs for regenerating those binary caches.
 
 The installed layout JSON files are packaged samples/reference files. The
 current runtime still provides `us_qwerty` and `colemak` as built-in layouts and

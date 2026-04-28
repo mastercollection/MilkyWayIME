@@ -15,11 +15,17 @@ if /i not "%PLATFORM%"=="All" if /i not "%PLATFORM%"=="x64" if /i not "%PLATFORM
 )
 
 set "SOURCE_HANJA_DIR=%ROOT%\external\libhangul\data\hanja"
+set "INSTALL_HANJA_DIR=%ProgramData%\MilkyWayIME\data\hanja"
 set "CTFMON64=%SystemRoot%\System32\ctfmon.exe"
 set "CTFMON32=%SystemRoot%\SysWOW64\ctfmon.exe"
 set "REGISTER_WIN32=0"
 if /i "%PLATFORM%"=="All" set "REGISTER_WIN32=1"
 if /i "%PLATFORM%"=="Win32" set "REGISTER_WIN32=1"
+
+if "%ProgramData%"=="" (
+    echo [ERROR] ProgramData is not available on this system.
+    exit /b 1
+)
 
 net session >nul 2>&1
 if errorlevel 1 (
@@ -42,6 +48,27 @@ if not exist "%SOURCE_HANJA_DIR%\mssymbol.bin" (
 )
 
 taskkill /f /im ctfmon.exe >nul 2>&1
+
+if not exist "%INSTALL_HANJA_DIR%" mkdir "%INSTALL_HANJA_DIR%"
+if errorlevel 1 (
+    echo [ERROR] Failed to create Hanja data directory:
+    echo %INSTALL_HANJA_DIR%
+    exit /b 1
+)
+
+copy /y "%SOURCE_HANJA_DIR%\hanja.bin" "%INSTALL_HANJA_DIR%\hanja.bin" >nul
+if errorlevel 1 (
+    echo [ERROR] Failed to copy hanja.bin to:
+    echo %INSTALL_HANJA_DIR%
+    exit /b 1
+)
+
+copy /y "%SOURCE_HANJA_DIR%\mssymbol.bin" "%INSTALL_HANJA_DIR%\mssymbol.bin" >nul
+if errorlevel 1 (
+    echo [ERROR] Failed to copy mssymbol.bin to:
+    echo %INSTALL_HANJA_DIR%
+    exit /b 1
+)
 
 if /i "%PLATFORM%"=="All" (
     call :RegisterPlatform Win32
@@ -72,18 +99,17 @@ if /i "%TARGET_PLATFORM%"=="Win32" (
     set "REGSVR32=%SystemRoot%\SysWOW64\regsvr32.exe"
 )
 set "INSTALL_DLL=%INSTALL_DIR%\mwime_tsf.dll"
-set "INSTALL_HANJA_DIR=%INSTALL_DIR%\data\hanja"
 
 if not exist "%BUILD_DLL%" (
     echo [ERROR] Built DLL not found:
-    echo %BUILD_DLL%
+    echo !BUILD_DLL!
     exit /b 1
 )
 
 if not exist "%INSTALL_DIR%" mkdir "%INSTALL_DIR%"
 if errorlevel 1 (
     echo [ERROR] Failed to create install directory:
-    echo %INSTALL_DIR%
+    echo !INSTALL_DIR!
     exit /b 1
 )
 
@@ -91,7 +117,7 @@ if exist "%INSTALL_DLL%" (
     "%REGSVR32%" /u /s "%INSTALL_DLL%"
     if errorlevel 1 (
         echo [ERROR] regsvr32 /u failed for:
-        echo %INSTALL_DLL%
+        echo !INSTALL_DLL!
         exit /b 1
     )
 )
@@ -99,37 +125,16 @@ if exist "%INSTALL_DLL%" (
 copy /y "%BUILD_DLL%" "%INSTALL_DLL%" >nul
 if errorlevel 1 (
     echo [ERROR] Failed to copy DLL to install directory:
-    echo %INSTALL_DLL%
-    exit /b 1
-)
-
-if not exist "%INSTALL_HANJA_DIR%" mkdir "%INSTALL_HANJA_DIR%"
-if errorlevel 1 (
-    echo [ERROR] Failed to create Hanja data directory:
-    echo %INSTALL_HANJA_DIR%
-    exit /b 1
-)
-
-copy /y "%SOURCE_HANJA_DIR%\hanja.bin" "%INSTALL_HANJA_DIR%\hanja.bin" >nul
-if errorlevel 1 (
-    echo [ERROR] Failed to copy hanja.bin to:
-    echo %INSTALL_HANJA_DIR%
-    exit /b 1
-)
-
-copy /y "%SOURCE_HANJA_DIR%\mssymbol.bin" "%INSTALL_HANJA_DIR%\mssymbol.bin" >nul
-if errorlevel 1 (
-    echo [ERROR] Failed to copy mssymbol.bin to:
-    echo %INSTALL_HANJA_DIR%
+    echo !INSTALL_DLL!
     exit /b 1
 )
 
 "%REGSVR32%" /s "%INSTALL_DLL%"
 if errorlevel 1 (
     echo [ERROR] regsvr32 failed for:
-    echo %INSTALL_DLL%
+    echo !INSTALL_DLL!
     exit /b 1
 )
 
-echo Registered %INSTALL_DLL%
+echo Registered !INSTALL_DLL!
 exit /b 0

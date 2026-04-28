@@ -94,3 +94,17 @@ This document defines the working rules for agents operating in `D:\Git\MilkyWay
 ## Wiki Knowledge Base
 WikiMode: managed
 WikiPath: D:\wiki\milkyWayIME
+
+## Security / antivirus compatibility
+This environment uses Bitdefender on Windows, and PowerShell-heavy or suspicious command lines may be blocked.
+
+Follow these rules strictly:
+- Avoid PowerShell unless absolutely necessary
+- Do not use encoded PowerShell commands
+- Do not generate long shell one-liners for file rewriting
+- Do not chain many shell commands together
+- Do not touch registry, startup settings, scheduled tasks, antivirus settings, or security settings
+- Do not use obfuscated scripts or suspicious automation patterns
+- Prefer standard dotnet CLI and git commands when command execution is needed
+- Keep commands short, explicit, and readable
+- If a command is blocked or likely to trigger antivirus heuristics, stop and propose the smallest safe manual alternative

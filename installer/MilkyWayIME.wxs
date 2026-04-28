@@ -71,19 +71,6 @@
         </Component>
 
         <Directory Id="DataFolder" Name="data">
-          <Directory Id="HanjaDataFolder" Name="hanja">
-            <Component Id="CmpHanjaBin" Guid="*">
-              <File Id="FileHanjaBin"
-                    Source="$(var.RepoRoot)external\libhangul\data\hanja\hanja.bin"
-                    KeyPath="yes" />
-            </Component>
-            <Component Id="CmpMsSymbolBin" Guid="*">
-              <File Id="FileMsSymbolBin"
-                    Source="$(var.RepoRoot)external\libhangul\data\hanja\mssymbol.bin"
-                    KeyPath="yes" />
-            </Component>
-          </Directory>
-
           <Directory Id="LayoutsFolder" Name="layouts">
             <Directory Id="BaseLayoutsFolder" Name="base">
               <Component Id="CmpUsQwertyLayoutJson" Guid="*">
@@ -97,6 +84,25 @@
                       KeyPath="yes" />
               </Component>
             </Directory>
+          </Directory>
+        </Directory>
+      </Directory>
+    </StandardDirectory>
+
+    <StandardDirectory Id="CommonAppDataFolder">
+      <Directory Id="ProgramDataMilkyWayFolder" Name="MilkyWayIME">
+        <Directory Id="ProgramDataDataFolder" Name="data">
+          <Directory Id="ProgramDataHanjaDataFolder" Name="hanja">
+            <Component Id="CmpHanjaBin" Guid="*">
+              <File Id="FileHanjaBin"
+                    Source="$(var.RepoRoot)external\libhangul\data\hanja\hanja.bin"
+                    KeyPath="yes" />
+            </Component>
+            <Component Id="CmpMsSymbolBin" Guid="*">
+              <File Id="FileMsSymbolBin"
+                    Source="$(var.RepoRoot)external\libhangul\data\hanja\mssymbol.bin"
+                    KeyPath="yes" />
+            </Component>
           </Directory>
         </Directory>
       </Directory>

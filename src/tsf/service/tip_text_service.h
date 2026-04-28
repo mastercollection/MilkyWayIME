@@ -24,6 +24,9 @@
 #include "engine/shortcut/shortcut_resolver.h"
 #include "engine/state/modifier_state.h"
 #include "tsf/display/display_attribute.h"
+#include "tsf/edit/nikke_direct_text_composition.h"
+#include "tsf/edit/transitory_composition_bridge.h"
+#include "tsf/edit/transitory_direct_text_composition.h"
 #include "tsf/edit/tsf_text_edit_sink.h"
 #include "tsf/candidate/candidate_list_ui.h"
 #include "tsf/service/text_service.h"
@@ -75,6 +78,7 @@ class TipTextService final : public ITfTextInputProcessorEx,
                              public ITfCompositionSink,
                              public ITfThreadFocusSink,
                              public ITfCompartmentEventSink,
+                             public ITfActiveLanguageProfileNotifySink,
                              public ITfDisplayAttributeProvider,
                              public candidate::CandidateListOwner {
  public:
@@ -122,6 +126,9 @@ class TipTextService final : public ITfTextInputProcessorEx,
 
   STDMETHODIMP OnChange(REFGUID guid) override;
 
+  STDMETHODIMP OnActivated(REFCLSID clsid, REFGUID profile,
+                           BOOL activated) override;
+
   STDMETHODIMP EnumDisplayAttributeInfo(
       IEnumTfDisplayAttributeInfo** enum_info) override;
   STDMETHODIMP GetDisplayAttributeInfo(REFGUID guid_info,
@@ -130,7 +137,7 @@ class TipTextService final : public ITfTextInputProcessorEx,
   void OnCandidateListAbort() override;
 
   TfClientId client_id() const;
-  bool HasActiveComposition() const;
+  bool HasTrackedTsfComposition() const;
   HRESULT CommitText(TfEditCookie edit_cookie, ITfContext* context,
                      const std::wstring& text);
   HRESULT StartComposition(TfEditCookie edit_cookie, ITfContext* context,
@@ -139,6 +146,23 @@ class TipTextService final : public ITfTextInputProcessorEx,
                             const std::wstring& text);
   HRESULT CompleteComposition(TfEditCookie edit_cookie);
   void ClearCompositionTracking();
+  bool ShouldUseTransitoryDirectTextComposition(
+      ITfContext* context,
+      const std::vector<edit::TextEditOperation>& operations) const;
+  ITfContext* ResolveTransitoryDirectTextContext(
+      ITfContext* context,
+      const std::vector<edit::TextEditOperation>& operations) const;
+  HRESULT ApplyTransitoryDirectTextComposition(
+      TfEditCookie edit_cookie, ITfContext* context,
+      const std::vector<edit::TextEditOperation>& operations);
+  void ResetTransitoryDirectTextComposition(const wchar_t* reason);
+  bool ShouldUseNikkeDirectTextComposition(
+      ITfContext* context,
+      const std::vector<edit::TextEditOperation>& operations) const;
+  HRESULT ApplyNikkeDirectTextComposition(
+      TfEditCookie edit_cookie, ITfContext* context,
+      const std::vector<edit::TextEditOperation>& operations);
+  void ResetNikkeDirectTextComposition(const wchar_t* reason);
 
  private:
   HRESULT AdviseThreadMgrEventSink();
@@ -149,6 +173,8 @@ class TipTextService final : public ITfTextInputProcessorEx,
   void UnadviseKeyEventSink();
   HRESULT AdviseKeyboardOpenCloseCompartmentSink();
   void UnadviseKeyboardOpenCloseCompartmentSink();
+  HRESULT AdviseActiveLanguageProfileNotifySink();
+  void UnadviseActiveLanguageProfileNotifySink();
   HRESULT RegisterPreservedKeys();
   void UnregisterPreservedKeys();
   HRESULT InitDisplayAttributeGuidAtom();
@@ -228,6 +254,7 @@ class TipTextService final : public ITfTextInputProcessorEx,
   std::optional<RECT> CaretCandidateTextRect(ITfContext* context) const;
   HRESULT MoveSelectionToRangeEnd(TfEditCookie edit_cookie, ITfContext* context,
                                   ITfRange* range) const;
+  void ResetTransitoryCompositionBridge(const wchar_t* reason);
   HRESULT ClearCompositionDisplayAttribute(TfEditCookie edit_cookie,
                                            ITfContext* context) const;
   HRESULT ApplyCompositionDisplayAttribute(TfEditCookie edit_cookie,
@@ -243,6 +270,7 @@ class TipTextService final : public ITfTextInputProcessorEx,
   DWORD thread_mgr_event_sink_cookie_ = TF_INVALID_COOKIE;
   DWORD thread_focus_sink_cookie_ = TF_INVALID_COOKIE;
   DWORD keyboard_openclose_compartment_sink_cookie_ = TF_INVALID_COOKIE;
+  DWORD active_language_profile_notify_sink_cookie_ = TF_INVALID_COOKIE;
   DWORD text_edit_sink_cookie_ = TF_INVALID_COOKIE;
   ITfContext* text_edit_sink_context_ = nullptr;
   ITfComposition* composition_ = nullptr;
@@ -255,6 +283,9 @@ class TipTextService final : public ITfTextInputProcessorEx,
   engine::layout::LayoutRegistry layout_registry_;
   adapters::dictionary::LibhangulHanjaDictionary hanja_dictionary_;
   engine::session::InputSession session_;
+  edit::TransitoryCompositionBridge transitory_composition_bridge_;
+  edit::TransitoryDirectTextComposition transitory_direct_text_;
+  edit::NikkeDirectTextComposition nikke_direct_text_;
   edit::TsfTextEditSink edit_sink_;
   TextService logic_;
   candidate::CandidateListUi* candidate_list_ = nullptr;

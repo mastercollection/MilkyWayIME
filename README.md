@@ -213,9 +213,11 @@ Run both scripts from an elevated Command Prompt.
 The registration script copies `build\MilkyWayIME.Tsf\x64\Debug\mwime_tsf.dll` to
 `%ProgramW6432%\MilkyWayIME\mwime_tsf.dll`, registers that installed copy
 through `regsvr32`, copies required `hanja.bin` and `mssymbol.bin` into
-`%ProgramW6432%\MilkyWayIME\data\hanja`, and restarts `ctfmon.exe` so the TSF
-profile refreshes. Runtime Hanja lookup loads the binary cache only; text
-sources are used to regenerate the binary cache during development.
+`%ProgramData%\MilkyWayIME\data\hanja`, and restarts `ctfmon.exe` so the TSF
+profile refreshes. Runtime Hanja lookup prefers the ProgramData binary cache,
+falls back to the legacy DLL-adjacent cache, and finally uses the development
+source tree path in Debug-style runs. Text sources are used to regenerate the
+binary cache during development.
 
 Regenerate the source-tree Hanja binary caches with:
 

@@ -2,6 +2,11 @@
 
 #include <utility>
 
+#if defined(_WIN32) && defined(_DEBUG)
+#include <windows.h>
+
+#include "tsf/debug/debug_log.h"
+#endif
 #include "tsf/edit/composition_edit_session.h"
 
 namespace milkyway::tsf::service {
@@ -25,6 +30,40 @@ KeyEventCategory ToServiceCategory(engine::key::KeyCategory category) {
 
   return KeyEventCategory::kUnhandled;
 }
+
+#if defined(_WIN32) && defined(_DEBUG)
+
+const wchar_t* CompositionEndReasonName(
+    engine::session::CompositionEndReason reason) {
+  switch (reason) {
+    case engine::session::CompositionEndReason::kNone:
+      return L"None";
+    case engine::session::CompositionEndReason::kCompleted:
+      return L"Completed";
+    case engine::session::CompositionEndReason::kBackspace:
+      return L"Backspace";
+    case engine::session::CompositionEndReason::kDelimiter:
+      return L"Delimiter";
+    case engine::session::CompositionEndReason::kImeModeToggle:
+      return L"ImeModeToggle";
+    case engine::session::CompositionEndReason::kFocusLost:
+      return L"FocusLost";
+    case engine::session::CompositionEndReason::kSelectionMoved:
+      return L"SelectionMoved";
+    case engine::session::CompositionEndReason::kExternalTermination:
+      return L"ExternalTermination";
+    case engine::session::CompositionEndReason::kShortcutBypass:
+      return L"ShortcutBypass";
+    case engine::session::CompositionEndReason::kLayoutChanged:
+      return L"LayoutChanged";
+    case engine::session::CompositionEndReason::kCandidateSelected:
+      return L"CandidateSelected";
+  }
+
+  return L"Unknown";
+}
+
+#endif
 
 std::string PrintableTokenText(engine::key::LayoutKey key, bool shift) {
   using engine::key::LayoutKey;
@@ -210,13 +249,36 @@ bool TextService::OnSelectionMovedOutsideComposition() {
 }
 
 void TextService::OnCompositionTerminated() {
+#if defined(_WIN32) && defined(_DEBUG)
+  debug::DebugLog(
+      L"[MilkyWayIME][TextService::OnCompositionTerminated][Begin] "
+      L"session_composing=" +
+      std::to_wstring(session_->IsComposing() ? 1 : 0) +
+      L" last_end_reason=" +
+      CompositionEndReasonName(session_->last_end_reason()));
+#endif
   if (session_->IsComposing()) {
     ResetInternalState(
         engine::session::CompositionEndReason::kExternalTermination);
+#if defined(_WIN32) && defined(_DEBUG)
+    debug::DebugLog(
+        L"[MilkyWayIME][TextService::OnCompositionTerminated][End] "
+        L"session_composing=" +
+        std::to_wstring(session_->IsComposing() ? 1 : 0) +
+        L" last_end_reason=" +
+        CompositionEndReasonName(session_->last_end_reason()));
+#endif
     return;
   }
 
   composer_->Reset();
+#if defined(_WIN32) && defined(_DEBUG)
+  debug::DebugLog(
+      std::wstring(
+          L"[MilkyWayIME][TextService::OnCompositionTerminated][End] "
+          L"session_composing=0 last_end_reason=") +
+      CompositionEndReasonName(session_->last_end_reason()));
+#endif
 }
 
 engine::key::KeyAnalysis TextService::AnalyzeKeyEvent(
@@ -370,17 +432,40 @@ KeyEventResult TextService::HandleModifiedShortcut(
 
 bool TextService::EndActiveComposition(
     engine::session::CompositionEndReason reason) {
+#if defined(_WIN32) && defined(_DEBUG)
+  debug::DebugLog(
+      L"[MilkyWayIME][TextService::EndActiveComposition][Begin] reason=" +
+      std::wstring(CompositionEndReasonName(reason)) +
+      L" session_composing=" +
+      std::to_wstring(session_->IsComposing() ? 1 : 0));
+#endif
   edit::EndCompositionEditSession edit_session(reason);
   const bool ended = edit_session.Apply(*session_, *edit_sink_);
   if (ended) {
     composer_->Reset();
   }
 
+#if defined(_WIN32) && defined(_DEBUG)
+  debug::DebugLog(
+      L"[MilkyWayIME][TextService::EndActiveComposition][End] reason=" +
+      std::wstring(CompositionEndReasonName(reason)) + L" ended=" +
+      std::to_wstring(ended ? 1 : 0) + L" session_composing=" +
+      std::to_wstring(session_->IsComposing() ? 1 : 0) +
+      L" last_end_reason=" +
+      CompositionEndReasonName(session_->last_end_reason()));
+#endif
   return ended;
 }
 
 void TextService::ResetInternalState(
     engine::session::CompositionEndReason reason) {
+#if defined(_WIN32) && defined(_DEBUG)
+  debug::DebugLog(
+      L"[MilkyWayIME][TextService::ResetInternalState] reason=" +
+      std::wstring(CompositionEndReasonName(reason)) +
+      L" session_composing_before=" +
+      std::to_wstring(session_->IsComposing() ? 1 : 0));
+#endif
   composer_->Reset();
   session_->EndComposition(reason);
 }

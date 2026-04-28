@@ -2,6 +2,8 @@
 
 #if defined(_WIN32)
 
+#include <cstdint>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -21,6 +23,15 @@ std::wstring FormatHex(std::uint32_t value) {
   swprintf_s(buffer, L"%08X", value);
   return buffer;
 }
+
+#if defined(_DEBUG)
+std::wstring PointerToString(const void* pointer) {
+  std::wostringstream stream;
+  stream << std::uppercase << std::hex
+         << reinterpret_cast<std::uintptr_t>(pointer);
+  return stream.str();
+}
+#endif
 
 std::wstring Utf8ToWide(const std::string& text) {
   if (text.empty()) {
@@ -116,8 +127,17 @@ class WriteEditSession final : public ITfEditSession {
   }
 
   STDMETHODIMP DoEditSession(TfEditCookie edit_cookie) override {
+    if (host_->ShouldUseTransitoryDirectTextComposition(context_, operations_)) {
+      const HRESULT direct_hr =
+          host_->ApplyTransitoryDirectTextComposition(edit_cookie, context_,
+                                                     operations_);
+      if (direct_hr != S_FALSE) {
+        return direct_hr;
+      }
+    }
+
     const std::vector<PlannedEditAction> plan =
-        PlanTextEditActions(host_->HasActiveComposition(), operations_);
+        PlanTextEditActions(host_->HasTrackedTsfComposition(), operations_);
 
 #if defined(_DEBUG)
     debug::DebugLog(L"[MilkyWayIME][EditSession] begin operations=" +
@@ -171,6 +191,32 @@ class WriteEditSession final : public ITfEditSession {
   std::vector<TextEditOperation> operations_;
 };
 
+HRESULT RequestWriteEditSession(service::TipTextService* host,
+                                ITfContext* context,
+                                std::vector<TextEditOperation> operations,
+                                DWORD request_flags, bool* flushing,
+                                HRESULT* session_hr) {
+  if (host == nullptr || context == nullptr || flushing == nullptr ||
+      session_hr == nullptr) {
+    return E_INVALIDARG;
+  }
+
+  WriteEditSession* edit_session =
+      new (std::nothrow) WriteEditSession(host, context, std::move(operations));
+  if (edit_session == nullptr) {
+    return E_OUTOFMEMORY;
+  }
+
+  *session_hr = E_FAIL;
+  *flushing = true;
+  const HRESULT hr = context->RequestEditSession(
+      host->client_id(), edit_session, request_flags, session_hr);
+  *flushing = false;
+
+  edit_session->Release();
+  return hr;
+}
+
 }  // namespace
 
 TsfTextEditSink::TsfTextEditSink(service::TipTextService* host) : host_(host) {}
@@ -215,24 +261,57 @@ HRESULT TsfTextEditSink::Flush(ITfContext* context, DWORD request_flags) {
 
   std::vector<TextEditOperation> operations = pending_operations_;
 
-  WriteEditSession* edit_session =
-      new (std::nothrow) WriteEditSession(host_, context, std::move(operations));
-  if (edit_session == nullptr) {
-    return E_OUTOFMEMORY;
+  ITfContext* request_context =
+      host_->ResolveTransitoryDirectTextContext(context, operations);
+  const bool used_resolved_context = request_context != nullptr;
+  if (request_context == nullptr) {
+    request_context = context;
+    request_context->AddRef();
   }
 
-  HRESULT session_hr = E_FAIL;
-  flushing_ = true;
-  const HRESULT hr = context->RequestEditSession(
-      host_->client_id(), edit_session, request_flags, &session_hr);
-  flushing_ = false;
+#if defined(_DEBUG)
+  if (used_resolved_context) {
+    debug::DebugLog(
+        L"[MilkyWayIME][EditSink::Flush][ResolvedTransitoryContext] "
+        L"original_context=" +
+        PointerToString(context) + L" request_context=" +
+        PointerToString(request_context));
+  }
+#endif
 
-  edit_session->Release();
+  HRESULT session_hr = E_FAIL;
+  HRESULT hr = RequestWriteEditSession(host_, request_context,
+                                       std::move(operations), request_flags,
+                                       &flushing_, &session_hr);
+
+  if (FAILED(hr) && used_resolved_context) {
+#if defined(_DEBUG)
+    debug::DebugLog(
+        L"[MilkyWayIME][EditSink::Flush][ResolvedContextRequestFailed] "
+        L"request_flags=0x" +
+        FormatHex(static_cast<std::uint32_t>(request_flags)) +
+        L" original_context=" + PointerToString(context) +
+        L" request_context=" + PointerToString(request_context) + L" hr=0x" +
+        FormatHex(static_cast<std::uint32_t>(hr)) + L" session_hr=0x" +
+        FormatHex(static_cast<std::uint32_t>(session_hr)));
+#endif
+    request_context->Release();
+    request_context = context;
+    request_context->AddRef();
+    std::vector<TextEditOperation> fallback_operations = pending_operations_;
+    session_hr = E_FAIL;
+    hr = RequestWriteEditSession(host_, request_context,
+                                 std::move(fallback_operations), request_flags,
+                                 &flushing_, &session_hr);
+  }
+
+  request_context->Release();
   if (FAILED(hr)) {
 #if defined(_DEBUG)
     debug::DebugLog(L"[MilkyWayIME][EditSink::Flush][RequestEditSessionFailed] "
                     L"request_flags=0x" +
                     FormatHex(static_cast<std::uint32_t>(request_flags)) +
+                    L" context=" + PointerToString(context) +
                     L" hr=0x" +
                     FormatHex(static_cast<std::uint32_t>(hr)) +
                     L" session_hr=0x" +

@@ -46,20 +46,20 @@ set "INSTALL_DLL=%INSTALL_DIR%\mwime_tsf.dll"
 if not exist "%INSTALL_DLL%" (
     if /i "%MISSING_MODE%"=="optional" (
         echo [WARN] Installed DLL not found for %TARGET_PLATFORM%:
-        echo %INSTALL_DLL%
+        echo !INSTALL_DLL!
         exit /b 0
     )
     echo [ERROR] Installed DLL not found:
-    echo %INSTALL_DLL%
+    echo !INSTALL_DLL!
     exit /b 1
 )
 
 "%REGSVR32%" /u /s "%INSTALL_DLL%"
 if errorlevel 1 (
     echo [ERROR] regsvr32 /u failed for:
-    echo %INSTALL_DLL%
+    echo !INSTALL_DLL!
     exit /b 1
 )
 
-echo Unregistered %INSTALL_DLL%
+echo Unregistered !INSTALL_DLL!
 exit /b 0

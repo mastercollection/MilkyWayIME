@@ -2,7 +2,8 @@ param(
     [string]$Configuration = "Debug",
     [string]$Platform = "All",
     [string]$DllPath,
-    [string]$InstallDir
+    [string]$InstallDir,
+    [string]$HanjaDataDir
 )
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
@@ -52,6 +53,13 @@ if (($targetPlatforms.Count -gt 1) -and ($DllPath -or $InstallDir)) {
     throw "DllPath and InstallDir can only be used when Platform is x64 or Win32."
 }
 
+if (-not $HanjaDataDir) {
+    if (-not $env:ProgramData) {
+        throw "ProgramData is not available on this system."
+    }
+    $HanjaDataDir = Join-Path $env:ProgramData "MilkyWayIME\data\hanja"
+}
+
 $windowsIdentity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $windowsPrincipal = [Security.Principal.WindowsPrincipal]::new($windowsIdentity)
 $isAdministrator = $windowsPrincipal.IsInRole(
@@ -61,6 +69,19 @@ if (-not $isAdministrator) {
 }
 
 $sourceHanjaDir = Join-Path $repoRoot "external\libhangul\data\hanja"
+$installedHanjaDir = $HanjaDataDir
+
+New-Item -ItemType Directory -Path $installedHanjaDir -Force | Out-Null
+
+foreach ($name in @("hanja.bin", "mssymbol.bin")) {
+    $source = Join-Path $sourceHanjaDir $name
+    if (-not (Test-Path -LiteralPath $source)) {
+        throw "Required Hanja binary cache not found: $source. Run tools\generate-hanja-cache.cmd first."
+    }
+    Copy-Item -LiteralPath $source `
+        -Destination (Join-Path $installedHanjaDir $name) `
+        -Force
+}
 
 Get-Process -Name "ctfmon" -ErrorAction SilentlyContinue | Stop-Process -Force
 
@@ -77,7 +98,6 @@ foreach ($targetPlatform in $targetPlatforms) {
     $resolvedDll = Resolve-Path $targetDllPath -ErrorAction Stop
     $regsvr32 = Get-Regsvr32Path $targetPlatform
     $installedDll = Join-Path $targetInstallDir "mwime_tsf.dll"
-    $installedHanjaDir = Join-Path $targetInstallDir "data\hanja"
 
     New-Item -ItemType Directory -Path $targetInstallDir -Force | Out-Null
 
@@ -92,17 +112,6 @@ foreach ($targetPlatform in $targetPlatforms) {
     }
 
     Copy-Item -LiteralPath $resolvedDll.Path -Destination $installedDll -Force
-    New-Item -ItemType Directory -Path $installedHanjaDir -Force | Out-Null
-
-    foreach ($name in @("hanja.bin", "mssymbol.bin")) {
-        $source = Join-Path $sourceHanjaDir $name
-        if (-not (Test-Path -LiteralPath $source)) {
-            throw "Required Hanja binary cache not found: $source. Run tools\generate-hanja-cache.cmd first."
-        }
-        Copy-Item -LiteralPath $source `
-            -Destination (Join-Path $installedHanjaDir $name) `
-            -Force
-    }
 
     $registerProcess = Start-Process -FilePath $regsvr32 `
         -ArgumentList @("/s", $installedDll) `

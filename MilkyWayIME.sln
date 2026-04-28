@@ -14,6 +14,8 @@ Project("{BC8A1FFA-BEE3-4634-8014-F334798102B3}") = "libhangul", "external\libha
 EndProject
 Project("{BC8A1FFA-BEE3-4634-8014-F334798102B3}") = "MilkyWayIME.Tools.KeyboardMatrix", "MilkyWayIME.Tools.KeyboardMatrix.vcxproj", "{2433CB53-BA9A-435A-B23A-471B8251748F}"
 EndProject
+Project("{BC8A1FFA-BEE3-4634-8014-F334798102B3}") = "MilkyWayIME.Tools.FocusWatch", "MilkyWayIME.Tools.FocusWatch.vcxproj", "{D4E6F4C4-390C-44F8-91DF-42D3F017E6D5}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Win32 = Debug|Win32
@@ -70,6 +72,14 @@ Global
 		{2433CB53-BA9A-435A-B23A-471B8251748F}.Release|Win32.Build.0 = Release|Win32
 		{2433CB53-BA9A-435A-B23A-471B8251748F}.Release|x64.ActiveCfg = Release|x64
 		{2433CB53-BA9A-435A-B23A-471B8251748F}.Release|x64.Build.0 = Release|x64
+		{D4E6F4C4-390C-44F8-91DF-42D3F017E6D5}.Debug|Win32.ActiveCfg = Debug|Win32
+		{D4E6F4C4-390C-44F8-91DF-42D3F017E6D5}.Debug|Win32.Build.0 = Debug|Win32
+		{D4E6F4C4-390C-44F8-91DF-42D3F017E6D5}.Debug|x64.ActiveCfg = Debug|x64
+		{D4E6F4C4-390C-44F8-91DF-42D3F017E6D5}.Debug|x64.Build.0 = Debug|x64
+		{D4E6F4C4-390C-44F8-91DF-42D3F017E6D5}.Release|Win32.ActiveCfg = Release|Win32
+		{D4E6F4C4-390C-44F8-91DF-42D3F017E6D5}.Release|Win32.Build.0 = Release|Win32
+		{D4E6F4C4-390C-44F8-91DF-42D3F017E6D5}.Release|x64.ActiveCfg = Release|x64
+		{D4E6F4C4-390C-44F8-91DF-42D3F017E6D5}.Release|x64.Build.0 = Release|x64
 	EndGlobalSection
 	GlobalSection(ProjectDependencies) = postSolution
 	EndGlobalSection

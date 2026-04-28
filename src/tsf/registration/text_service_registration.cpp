@@ -5,6 +5,7 @@
 #include <strsafe.h>
 
 #include <array>
+#include <cstdint>
 #include <string>
 
 #include "tsf/service/module_state.h"
@@ -23,6 +24,8 @@ const std::array<GUID, 8> kSupportedCategories = {
     GUID_TFCAT_TIPCAP_COMLESS,
 };
 constexpr ULONG kTextServiceIconIndex = 0;
+constexpr DWORD kInstallLayoutOrTipInstall = 0x00000000;
+using InstallLayoutOrTipFn = BOOL(WINAPI*)(LPCWSTR, DWORD);
 
 std::wstring GuidToString(REFGUID guid) {
   wchar_t buffer[39] = {};
@@ -35,6 +38,73 @@ std::wstring GuidToString(REFGUID guid) {
 
 std::wstring ClsidRegistryPath() {
   return L"Software\\Classes\\CLSID\\" + GuidToString(kTextServiceClsid);
+}
+
+std::wstring LangidToTipString(LANGID langid) {
+  wchar_t buffer[8] = {};
+  swprintf_s(buffer, L"0x%04X", static_cast<std::uint16_t>(langid));
+  return buffer;
+}
+
+std::wstring TextServiceTipString() {
+  return LangidToTipString(kTextServiceLangid) + L":" +
+         GuidToString(kTextServiceClsid) + GuidToString(kTextServiceProfileGuid);
+}
+
+HMODULE LoadSystemInputDll() {
+  wchar_t system_directory[MAX_PATH] = {};
+  const UINT length = GetSystemDirectoryW(system_directory, MAX_PATH);
+  if (length == 0 || length >= MAX_PATH) {
+    return nullptr;
+  }
+
+  std::wstring input_dll_path(system_directory, length);
+  if (!input_dll_path.empty() && input_dll_path.back() != L'\\') {
+    input_dll_path.push_back(L'\\');
+  }
+  input_dll_path += L"input.dll";
+  return LoadLibraryW(input_dll_path.c_str());
+}
+
+HRESULT InstallTextServiceLayoutOrTip() {
+  const std::wstring tip = TextServiceTipString();
+  if (tip.empty()) {
+    return E_FAIL;
+  }
+
+  HMODULE input_dll = LoadSystemInputDll();
+  if (input_dll == nullptr) {
+    return HRESULT_FROM_WIN32(GetLastError());
+  }
+
+  auto* install_layout_or_tip = reinterpret_cast<InstallLayoutOrTipFn>(
+      GetProcAddress(input_dll, "InstallLayoutOrTip"));
+  if (install_layout_or_tip == nullptr) {
+    const DWORD error = GetLastError();
+    FreeLibrary(input_dll);
+    return HRESULT_FROM_WIN32(error);
+  }
+
+  const BOOL installed =
+      install_layout_or_tip(tip.c_str(), kInstallLayoutOrTipInstall);
+  const DWORD error = installed ? ERROR_SUCCESS : GetLastError();
+  FreeLibrary(input_dll);
+  return installed ? S_OK
+                   : (error == ERROR_SUCCESS ? E_FAIL
+                                             : HRESULT_FROM_WIN32(error));
+}
+
+void DebugRegistrationFailure(const wchar_t* operation, HRESULT hr) {
+#if defined(_DEBUG)
+  wchar_t buffer[192] = {};
+  StringCchPrintfW(buffer, std::size(buffer),
+                   L"[MilkyWayIME][RegisterTextService][%ls] hr=0x%08lX\n",
+                   operation, static_cast<unsigned long>(hr));
+  OutputDebugStringW(buffer);
+#else
+  (void)operation;
+  (void)hr;
+#endif
 }
 
 HRESULT RegisterServer() {
@@ -182,6 +252,15 @@ HRESULT RegisterTextService() {
   }
   if (SUCCEEDED(hr)) {
     hr = RegisterCategories();
+  }
+  if (SUCCEEDED(hr)) {
+    // InstallLayoutOrTip updates the current user's input list and can fail
+    // from elevated registration even after the machine-wide TSF registration
+    // succeeds. Keep the COM/profile registration intact and log the failure.
+    const HRESULT install_layout_hr = InstallTextServiceLayoutOrTip();
+    if (FAILED(install_layout_hr)) {
+      DebugRegistrationFailure(L"InstallLayoutOrTip", install_layout_hr);
+    }
   }
   if (FAILED(hr)) {
     UnregisterCategories();

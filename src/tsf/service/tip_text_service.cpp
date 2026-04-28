@@ -2,6 +2,9 @@
 
 #if defined(_WIN32)
 
+#include <ShlObj.h>
+#include <imm.h>
+
 #include <cstdint>
 #include <array>
 #include <exception>
@@ -12,6 +15,7 @@
 #include <string_view>
 #include <system_error>
 #include <utility>
+#include <vector>
 
 #include "engine/layout/base_layout_json_loader.h"
 #include "tsf/langbar/input_mode_lang_bar_item.h"
@@ -608,30 +612,50 @@ std::string WideToUtf8Text(std::wstring_view text) {
   return utf8_text;
 }
 
+std::filesystem::path ProgramDataHanjaDirectory() {
+  PWSTR program_data_path = nullptr;
+  const HRESULT hr = SHGetKnownFolderPath(FOLDERID_ProgramData, 0, nullptr,
+                                          &program_data_path);
+  if (FAILED(hr) || program_data_path == nullptr) {
+    return {};
+  }
+
+  std::filesystem::path path(program_data_path);
+  CoTaskMemFree(program_data_path);
+  return path / L"MilkyWayIME" / L"data" / L"hanja";
+}
+
+void UseHanjaDictionaryFilesFromDirectory(
+    adapters::dictionary::HanjaDictionaryPaths& paths,
+    const std::filesystem::path& directory) {
+  if (directory.empty()) {
+    return;
+  }
+
+  std::error_code error_code;
+  const std::filesystem::path hanja_binary = directory / L"hanja.bin";
+  const std::filesystem::path symbol_binary = directory / L"mssymbol.bin";
+  if (std::filesystem::is_regular_file(hanja_binary, error_code)) {
+    paths.hanja_binary_path = hanja_binary;
+  }
+  error_code.clear();
+  if (std::filesystem::is_regular_file(symbol_binary, error_code)) {
+    paths.symbol_binary_path = symbol_binary;
+  }
+}
+
 adapters::dictionary::HanjaDictionaryPaths ResolveHanjaDictionaryPaths() {
   adapters::dictionary::HanjaDictionaryPaths paths =
       adapters::dictionary::DefaultHanjaDictionaryPaths();
 
   const std::wstring module_path =
       registration::ModulePath(ModuleInstance());
-  if (module_path.empty()) {
-    return paths;
+  if (!module_path.empty()) {
+    const std::filesystem::path installed_hanja_dir =
+        std::filesystem::path(module_path).parent_path() / L"data" / L"hanja";
+    UseHanjaDictionaryFilesFromDirectory(paths, installed_hanja_dir);
   }
-
-  const std::filesystem::path installed_hanja_dir =
-      std::filesystem::path(module_path).parent_path() / L"data" / L"hanja";
-  std::error_code error_code;
-  const std::filesystem::path installed_hanja_binary =
-      installed_hanja_dir / L"hanja.bin";
-  const std::filesystem::path installed_symbol_binary =
-      installed_hanja_dir / L"mssymbol.bin";
-  if (std::filesystem::is_regular_file(installed_hanja_binary, error_code)) {
-    paths.hanja_binary_path = installed_hanja_binary;
-  }
-  error_code.clear();
-  if (std::filesystem::is_regular_file(installed_symbol_binary, error_code)) {
-    paths.symbol_binary_path = installed_symbol_binary;
-  }
+  UseHanjaDictionaryFilesFromDirectory(paths, ProgramDataHanjaDirectory());
 
   return paths;
 }
@@ -690,6 +714,269 @@ std::wstring CurrentProcessName() {
   return buffer;
 }
 
+std::wstring FileNameFromPath(std::wstring_view path) {
+  const std::size_t separator = path.find_last_of(L"\\/");
+  if (separator != std::wstring_view::npos && separator + 1 < path.size()) {
+    return std::wstring(path.substr(separator + 1));
+  }
+
+  return std::wstring(path);
+}
+
+std::wstring ProcessNameFromPid(DWORD process_id) {
+  if (process_id == 0) {
+    return L"<none>";
+  }
+
+  HANDLE process =
+      OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, process_id);
+  if (process == nullptr) {
+    return std::wstring(L"<open-failed:") + FormatHex(GetLastError()) + L">";
+  }
+
+  wchar_t buffer[MAX_PATH] = {};
+  DWORD length = MAX_PATH;
+  const BOOL ok = QueryFullProcessImageNameW(process, 0, buffer, &length);
+  const DWORD error = ok ? ERROR_SUCCESS : GetLastError();
+  CloseHandle(process);
+  if (!ok || length == 0) {
+    return std::wstring(L"<query-failed:") + FormatHex(error) + L">";
+  }
+
+  return FileNameFromPath(std::wstring_view(buffer, length));
+}
+
+std::wstring WindowClassName(HWND hwnd) {
+  if (hwnd == nullptr) {
+    return L"<none>";
+  }
+
+  wchar_t buffer[128] = {};
+  const int length = GetClassNameW(hwnd, buffer, static_cast<int>(std::size(buffer)));
+  if (length <= 0) {
+    return std::wstring(L"<class-failed:") + FormatHex(GetLastError()) + L">";
+  }
+
+  return std::wstring(buffer, static_cast<std::size_t>(length));
+}
+
+std::wstring ForegroundWindowDiagnostics() {
+  HWND hwnd = GetForegroundWindow();
+  DWORD process_id = 0;
+  const DWORD thread_id =
+      hwnd != nullptr ? GetWindowThreadProcessId(hwnd, &process_id) : 0;
+
+  return L"foreground_hwnd=" + PointerToString(hwnd) + L" foreground_pid=" +
+         std::to_wstring(process_id) + L" foreground_tid=" +
+         std::to_wstring(thread_id) + L" foreground_process=" +
+         ProcessNameFromPid(process_id) + L" foreground_class=" +
+         WindowClassName(hwnd);
+}
+
+std::wstring WindowProcessDiagnostics(HWND hwnd, const wchar_t* label) {
+  DWORD process_id = 0;
+  const DWORD thread_id =
+      hwnd != nullptr ? GetWindowThreadProcessId(hwnd, &process_id) : 0;
+
+  return std::wstring(label) + L"_hwnd=" + PointerToString(hwnd) + L" " +
+         label + L"_pid=" + std::to_wstring(process_id) + L" " + label +
+         L"_tid=" + std::to_wstring(thread_id) + L" " + label +
+         L"_process=" + ProcessNameFromPid(process_id) + L" " + label +
+         L"_class=" + WindowClassName(hwnd);
+}
+
+std::wstring VariantValueToString(const VARIANT& value) {
+  switch (value.vt) {
+    case VT_EMPTY:
+      return L"<empty>";
+    case VT_I4:
+      return std::to_wstring(value.lVal);
+    case VT_UI4:
+      return std::to_wstring(value.ulVal);
+    case VT_BOOL:
+      return value.boolVal == VARIANT_TRUE ? L"1" : L"0";
+    default:
+      return std::wstring(L"<vt:") + std::to_wstring(value.vt) + L">";
+  }
+}
+
+std::wstring CompartmentDiagnostics(ITfCompartmentMgr* manager, REFGUID guid,
+                                    const wchar_t* label) {
+  ITfCompartment* compartment = nullptr;
+  const HRESULT hr = manager->GetCompartment(guid, &compartment);
+  std::wstring diagnostics = std::wstring(L" ") + label + L"_get_hr=0x" +
+                              FormatHex(static_cast<std::uint32_t>(hr));
+  if (FAILED(hr) || compartment == nullptr) {
+    return diagnostics;
+  }
+
+  VARIANT value;
+  VariantInit(&value);
+  const HRESULT value_hr = compartment->GetValue(&value);
+  diagnostics += std::wstring(L" ") + label + L"_value_hr=0x" +
+                 FormatHex(static_cast<std::uint32_t>(value_hr));
+  if (SUCCEEDED(value_hr)) {
+    diagnostics += std::wstring(L" ") + label + L"_vt=" +
+                   std::to_wstring(value.vt) + L" " + label + L"_value=" +
+                   VariantValueToString(value);
+  }
+  VariantClear(&value);
+  compartment->Release();
+  return diagnostics;
+}
+
+bool IsContextTransitory(ITfContext* context) {
+  if (context == nullptr) {
+    return false;
+  }
+
+  TF_STATUS status = {};
+  return SUCCEEDED(context->GetStatus(&status)) &&
+         (status.dwStaticFlags & TS_SS_TRANSITORY) != 0;
+}
+
+std::wstring ActiveViewDiagnostics(ITfContext* context, HWND* hwnd_out) {
+  if (hwnd_out != nullptr) {
+    *hwnd_out = nullptr;
+  }
+  if (context == nullptr) {
+    return L"active_view_context=null";
+  }
+
+  ITfContextView* view = nullptr;
+  const HRESULT view_hr = context->GetActiveView(&view);
+  std::wstring diagnostics =
+      L"active_view_hr=0x" +
+      FormatHex(static_cast<std::uint32_t>(view_hr)) + L" active_view=" +
+      PointerToString(view);
+  if (FAILED(view_hr) || view == nullptr) {
+    return diagnostics;
+  }
+
+  HWND hwnd = nullptr;
+  const HRESULT hwnd_hr = view->GetWnd(&hwnd);
+  diagnostics += L" get_wnd_hr=0x" +
+                 FormatHex(static_cast<std::uint32_t>(hwnd_hr)) + L" " +
+                 WindowProcessDiagnostics(hwnd, L"view");
+  if (SUCCEEDED(hwnd_hr) && hwnd_out != nullptr) {
+    *hwnd_out = hwnd;
+  }
+  view->Release();
+  return diagnostics;
+}
+
+std::wstring ContextDiagnostics(ITfContext* context) {
+  if (context == nullptr) {
+    return L"context_diag=null";
+  }
+
+  std::wstring diagnostics = L"context_diag=1";
+  TF_STATUS status = {};
+  const HRESULT status_hr = context->GetStatus(&status);
+  diagnostics += L" status_hr=0x" +
+                 FormatHex(static_cast<std::uint32_t>(status_hr));
+  if (SUCCEEDED(status_hr)) {
+    diagnostics += L" dynamic=0x" +
+                   FormatHex(static_cast<std::uint32_t>(
+                       status.dwDynamicFlags)) +
+                   L" static=0x" +
+                   FormatHex(static_cast<std::uint32_t>(
+                       status.dwStaticFlags)) +
+                   L" readonly=" +
+                   std::to_wstring(
+                       (status.dwDynamicFlags & TF_SD_READONLY) ? 1 : 0) +
+                   L" transitory=" +
+                   std::to_wstring(
+                       (status.dwStaticFlags & TS_SS_TRANSITORY) ? 1 : 0) +
+                   L" regions=" +
+                   std::to_wstring(
+                       (status.dwStaticFlags & TF_SS_REGIONS) ? 1 : 0) +
+                   L" disjointsel=" +
+                   std::to_wstring(
+                       (status.dwStaticFlags & TF_SS_DISJOINTSEL) ? 1 : 0);
+  }
+
+  ITfCompartmentMgr* compartment_manager = nullptr;
+  const HRESULT compartment_hr = context->QueryInterface(
+      IID_ITfCompartmentMgr, reinterpret_cast<void**>(&compartment_manager));
+  diagnostics += L" compartment_mgr_hr=0x" +
+                 FormatHex(static_cast<std::uint32_t>(compartment_hr));
+  if (SUCCEEDED(compartment_hr) && compartment_manager != nullptr) {
+    diagnostics +=
+        CompartmentDiagnostics(compartment_manager,
+                               GUID_COMPARTMENT_EMPTYCONTEXT, L"empty");
+    diagnostics += CompartmentDiagnostics(
+        compartment_manager, GUID_COMPARTMENT_KEYBOARD_DISABLED,
+        L"keyboard_disabled");
+    compartment_manager->Release();
+  }
+
+  HWND active_view_hwnd = nullptr;
+  diagnostics += L" " + ActiveViewDiagnostics(context, &active_view_hwnd);
+  return diagnostics;
+}
+
+const wchar_t* TransitoryBridgeTargetKindName(
+    edit::TransitoryCompositionBridgeTargetKind kind) {
+  switch (kind) {
+    case edit::TransitoryCompositionBridgeTargetKind::kNone:
+      return L"None";
+    case edit::TransitoryCompositionBridgeTargetKind::kObserveOnly:
+      return L"ObserveOnly";
+    case edit::TransitoryCompositionBridgeTargetKind::kSuppressEngineReset:
+      return L"SuppressEngineReset";
+  }
+
+  return L"Unknown";
+}
+
+edit::TransitoryCompositionBridgeSnapshot CaptureTransitoryBridgeSnapshot(
+    ITfContext* context, bool internal_composing,
+    bool has_tracked_tsf_composition, std::wstring preedit) {
+  edit::TransitoryCompositionBridgeSnapshot snapshot;
+  snapshot.target.process_name = CurrentProcessName();
+  snapshot.context = context;
+  snapshot.internal_composing = internal_composing;
+  snapshot.has_tracked_tsf_composition = has_tracked_tsf_composition;
+  snapshot.preedit = std::move(preedit);
+  if (context == nullptr) {
+    return snapshot;
+  }
+
+  snapshot.target.is_transitory = IsContextTransitory(context);
+
+  ITfContextView* view = nullptr;
+  if (SUCCEEDED(context->GetActiveView(&view)) && view != nullptr) {
+    HWND hwnd = nullptr;
+    if (SUCCEEDED(view->GetWnd(&hwnd))) {
+      snapshot.view_hwnd = hwnd;
+      snapshot.target.view_class = WindowClassName(hwnd);
+    }
+    view->Release();
+  }
+
+  return snapshot;
+}
+
+std::wstring TransitoryBridgeSnapshotDiagnostics(
+    const edit::TransitoryCompositionBridgeSnapshot& snapshot) {
+  const edit::TransitoryCompositionBridgeTargetKind kind =
+      edit::GetTransitoryCompositionBridgeTargetKind(snapshot.target);
+  return L"transitory_bridge_target_kind=" +
+         std::wstring(TransitoryBridgeTargetKindName(kind)) +
+         L" transitory_bridge_process=" + snapshot.target.process_name +
+         L" transitory_bridge_view_class=" + snapshot.target.view_class +
+         L" transitory_bridge_transitory=" +
+         std::to_wstring(snapshot.target.is_transitory ? 1 : 0) +
+         L" transitory_bridge_context=" + PointerToString(snapshot.context) +
+         L" transitory_bridge_view_hwnd=" +
+         PointerToString(snapshot.view_hwnd) +
+         L" transitory_bridge_internal_engine_composing=" +
+         std::to_wstring(snapshot.internal_composing ? 1 : 0) +
+         L" transitory_bridge_tracked_tsf_composition=" +
+         std::to_wstring(snapshot.has_tracked_tsf_composition ? 1 : 0);
+}
+
 const wchar_t* CategoryName(KeyEventCategory category) {
   switch (category) {
     case KeyEventCategory::kHangulAscii:
@@ -716,6 +1003,363 @@ const wchar_t* ShortcutActionName(engine::shortcut::ShortcutAction action) {
   }
 
   return L"Unknown";
+}
+
+std::wstring CompositionTrackingState(const wchar_t* label,
+                                      const ITfComposition* composition,
+                                      const ITfContext* context) {
+  return std::wstring(label) + L"_composition=" + PointerToString(composition) +
+         L" " + label + L"_context=" + PointerToString(context);
+}
+
+std::wstring EscapeTextForLog(std::wstring_view text) {
+  constexpr std::size_t kMaxLogText = 64;
+  std::wstring escaped;
+  escaped.reserve(text.size());
+  for (wchar_t ch : text) {
+    switch (ch) {
+      case L'\r':
+        escaped += L"\\r";
+        break;
+      case L'\n':
+        escaped += L"\\n";
+        break;
+      case L'\t':
+        escaped += L"\\t";
+        break;
+      default:
+        escaped.push_back(ch);
+        break;
+    }
+    if (escaped.size() >= kMaxLogText) {
+      escaped.resize(kMaxLogText);
+      escaped += L"...";
+      break;
+    }
+  }
+  return escaped;
+}
+
+bool EndsWithText(std::wstring_view text, std::wstring_view suffix) {
+  if (suffix.empty() || suffix.size() > text.size()) {
+    return false;
+  }
+  return text.substr(text.size() - suffix.size()) == suffix;
+}
+
+bool SafeDwordAdd(DWORD a, DWORD b, DWORD* result) {
+  if (result == nullptr || a > MAXDWORD - b) {
+    return false;
+  }
+  *result = a + b;
+  return true;
+}
+
+bool SafeDwordMultiply(DWORD a, DWORD b, DWORD* result) {
+  if (result == nullptr || (a != 0 && b > MAXDWORD / a)) {
+    return false;
+  }
+  *result = a * b;
+  return true;
+}
+
+struct ReconvertDocumentFeed {
+  std::wstring preceding_text;
+  std::wstring preceding_composition;
+  std::wstring target;
+  std::wstring following_composition;
+  std::wstring following_text;
+  bool valid = false;
+};
+
+ReconvertDocumentFeed DecomposeReconvertDocumentFeed(
+    const RECONVERTSTRING* reconvert_string) {
+  ReconvertDocumentFeed feed;
+  if (reconvert_string == nullptr ||
+      reconvert_string->dwSize < sizeof(RECONVERTSTRING) ||
+      reconvert_string->dwVersion != 0 ||
+      reconvert_string->dwStrOffset > reconvert_string->dwSize) {
+    return feed;
+  }
+
+  DWORD buffer_size_in_bytes = 0;
+  if (!SafeDwordAdd(reconvert_string->dwSize - reconvert_string->dwStrOffset,
+                    0, &buffer_size_in_bytes)) {
+    return feed;
+  }
+
+  DWORD string_size_in_bytes = 0;
+  if (!SafeDwordMultiply(reconvert_string->dwStrLen, sizeof(wchar_t),
+                         &string_size_in_bytes) ||
+      string_size_in_bytes > buffer_size_in_bytes ||
+      reconvert_string->dwCompStrOffset > buffer_size_in_bytes ||
+      reconvert_string->dwTargetStrOffset > buffer_size_in_bytes ||
+      (reconvert_string->dwCompStrOffset % sizeof(wchar_t)) != 0 ||
+      (reconvert_string->dwTargetStrOffset % sizeof(wchar_t)) != 0) {
+    return feed;
+  }
+
+  const DWORD composition_begin =
+      reconvert_string->dwCompStrOffset / sizeof(wchar_t);
+  DWORD composition_end = 0;
+  if (!SafeDwordAdd(composition_begin, reconvert_string->dwCompStrLen,
+                    &composition_end)) {
+    return feed;
+  }
+
+  const DWORD target_begin =
+      reconvert_string->dwTargetStrOffset / sizeof(wchar_t);
+  DWORD target_end = 0;
+  if (!SafeDwordAdd(target_begin, reconvert_string->dwTargetStrLen,
+                    &target_end)) {
+    return feed;
+  }
+
+  if (!(composition_begin <= target_begin && target_end <= composition_end &&
+        composition_end <= reconvert_string->dwStrLen)) {
+    return feed;
+  }
+
+  const wchar_t* string_buffer = reinterpret_cast<const wchar_t*>(
+      reinterpret_cast<const BYTE*>(reconvert_string) +
+      reconvert_string->dwStrOffset);
+  feed.preceding_text.assign(string_buffer, string_buffer + composition_begin);
+  feed.preceding_composition.assign(string_buffer + composition_begin,
+                                    string_buffer + target_begin);
+  feed.target.assign(string_buffer + target_begin, string_buffer + target_end);
+  feed.following_composition.assign(string_buffer + target_end,
+                                    string_buffer + composition_end);
+  feed.following_text.assign(string_buffer + composition_end,
+                             string_buffer + reconvert_string->dwStrLen);
+  feed.valid = true;
+  return feed;
+}
+
+template <typename Interface>
+void AppendInterfaceProbe(IUnknown* unknown, REFIID iid, const wchar_t* name,
+                          std::wstring* message) {
+  if (message == nullptr) {
+    return;
+  }
+
+  Interface* interface_ptr = nullptr;
+  const HRESULT hr =
+      unknown != nullptr
+          ? unknown->QueryInterface(iid,
+                                    reinterpret_cast<void**>(&interface_ptr))
+          : E_INVALIDARG;
+  *message += L" ";
+  *message += name;
+  *message += L"_hr=0x";
+  *message += FormatHex(static_cast<std::uint32_t>(hr));
+  *message += L" ";
+  *message += name;
+  *message += L"=";
+  *message += PointerToString(interface_ptr);
+  SafeRelease(interface_ptr);
+}
+
+void LogTransitoryParentProbe(ITfContext* context, const wchar_t* origin) {
+  ITfDocumentMgr* document_mgr = nullptr;
+  HRESULT doc_hr =
+      context != nullptr ? context->GetDocumentMgr(&document_mgr) : E_INVALIDARG;
+
+  std::wstring message =
+      L"[MilkyWayIME][FallbackProbe][TransitoryParent] origin=" +
+      std::wstring(origin) + L" context=" + PointerToString(context) +
+      L" doc_hr=0x" + FormatHex(static_cast<std::uint32_t>(doc_hr)) +
+      L" docmgr=" + PointerToString(document_mgr);
+  if (FAILED(doc_hr) || document_mgr == nullptr) {
+    debug::DebugLog(std::move(message));
+    SafeRelease(document_mgr);
+    return;
+  }
+
+  ITfCompartmentMgr* compartment_manager = nullptr;
+  const HRESULT manager_hr = document_mgr->QueryInterface(
+      IID_ITfCompartmentMgr, reinterpret_cast<void**>(&compartment_manager));
+  message += L" compartment_mgr_hr=0x" +
+             FormatHex(static_cast<std::uint32_t>(manager_hr)) +
+             L" compartment_mgr=" + PointerToString(compartment_manager);
+  if (FAILED(manager_hr) || compartment_manager == nullptr) {
+    debug::DebugLog(std::move(message));
+    SafeRelease(document_mgr);
+    return;
+  }
+
+  ITfCompartment* compartment = nullptr;
+  const HRESULT compartment_hr = compartment_manager->GetCompartment(
+      GUID_COMPARTMENT_TRANSITORYEXTENSION_PARENT, &compartment);
+  message += L" parent_get_hr=0x" +
+             FormatHex(static_cast<std::uint32_t>(compartment_hr)) +
+             L" parent_compartment=" + PointerToString(compartment);
+  if (SUCCEEDED(compartment_hr) && compartment != nullptr) {
+    VARIANT value;
+    VariantInit(&value);
+    const HRESULT value_hr = compartment->GetValue(&value);
+    message += L" parent_value_hr=0x" +
+               FormatHex(static_cast<std::uint32_t>(value_hr)) +
+               L" parent_vt=" + std::to_wstring(value.vt);
+    if (SUCCEEDED(value_hr) && value.vt == VT_UNKNOWN &&
+        value.punkVal != nullptr) {
+      message += L" parent_unknown=" + PointerToString(value.punkVal);
+      AppendInterfaceProbe<IUnknown>(value.punkVal, IID_IUnknown, L"qi_iunknown",
+                                     &message);
+      AppendInterfaceProbe<ITfDocumentMgr>(value.punkVal, IID_ITfDocumentMgr,
+                                           L"qi_document_mgr", &message);
+      AppendInterfaceProbe<ITfContext>(value.punkVal, IID_ITfContext,
+                                       L"qi_context", &message);
+      AppendInterfaceProbe<ITfContextComposition>(
+          value.punkVal, IID_ITfContextComposition, L"qi_context_composition",
+          &message);
+      AppendInterfaceProbe<ITfInsertAtSelection>(
+          value.punkVal, IID_ITfInsertAtSelection, L"qi_insert_at_selection",
+          &message);
+      AppendInterfaceProbe<ITfCompartmentMgr>(
+          value.punkVal, IID_ITfCompartmentMgr, L"qi_compartment_mgr",
+          &message);
+      AppendInterfaceProbe<ITfSource>(value.punkVal, IID_ITfSource,
+                                      L"qi_source", &message);
+      AppendInterfaceProbe<ITfThreadMgr>(value.punkVal, IID_ITfThreadMgr,
+                                         L"qi_thread_mgr", &message);
+      AppendInterfaceProbe<IServiceProvider>(
+          value.punkVal, IID_IServiceProvider, L"qi_service_provider",
+          &message);
+
+      ITfDocumentMgr* parent_document_mgr = nullptr;
+      const HRESULT parent_doc_hr = value.punkVal->QueryInterface(
+          IID_ITfDocumentMgr,
+          reinterpret_cast<void**>(&parent_document_mgr));
+      message += L" parent_doc_hr=0x" +
+                 FormatHex(static_cast<std::uint32_t>(parent_doc_hr)) +
+                 L" parent_docmgr=" + PointerToString(parent_document_mgr);
+      if (SUCCEEDED(parent_doc_hr) && parent_document_mgr != nullptr) {
+        ITfContext* parent_context = nullptr;
+        const HRESULT parent_context_hr =
+            parent_document_mgr->GetTop(&parent_context);
+        message += L" parent_context_hr=0x" +
+                   FormatHex(static_cast<std::uint32_t>(parent_context_hr)) +
+                   L" parent_context=" + PointerToString(parent_context);
+        if (SUCCEEDED(parent_context_hr) && parent_context != nullptr) {
+          message += L" " + ContextDiagnostics(parent_context);
+        }
+        SafeRelease(parent_context);
+      }
+      SafeRelease(parent_document_mgr);
+    }
+    VariantClear(&value);
+  }
+
+  debug::DebugLog(std::move(message));
+  SafeRelease(compartment);
+  SafeRelease(compartment_manager);
+  SafeRelease(document_mgr);
+}
+
+void LogImmDocumentFeedProbe(ITfContext* context, const wchar_t* origin,
+                             std::wstring_view current_preedit) {
+  HWND hwnd = nullptr;
+  std::wstring view_diagnostics = ActiveViewDiagnostics(context, &hwnd);
+  std::wstring message =
+      L"[MilkyWayIME][FallbackProbe][DocumentFeed] origin=" +
+      std::wstring(origin) + L" context=" + PointerToString(context) +
+      L" current_preedit=\"" + EscapeTextForLog(current_preedit) +
+      L"\" current_preedit_utf16=" +
+      std::to_wstring(current_preedit.size()) + L" " + view_diagnostics;
+  if (hwnd == nullptr) {
+    debug::DebugLog(std::move(message));
+    return;
+  }
+
+  constexpr UINT kProbeTimeoutMs = 100;
+  DWORD_PTR size_result = 0;
+  SetLastError(ERROR_SUCCESS);
+  const bool size_sent = SendMessageTimeoutW(
+      hwnd, WM_IME_REQUEST, static_cast<WPARAM>(IMR_DOCUMENTFEED), 0,
+      SMTO_ABORTIFHUNG | SMTO_BLOCK, kProbeTimeoutMs, &size_result) != 0;
+  const DWORD size_error = GetLastError();
+  message += L" size_sent=" + std::to_wstring(size_sent ? 1 : 0) +
+             L" size_result=" + std::to_wstring(size_result) +
+             L" size_error=0x" + FormatHex(size_error);
+  if (!size_sent || size_result == 0) {
+    debug::DebugLog(std::move(message));
+    return;
+  }
+
+  constexpr DWORD_PTR kMaxDocumentFeedBytes = 1024 * 1024;
+  if (size_result < sizeof(RECONVERTSTRING) ||
+      size_result > kMaxDocumentFeedBytes) {
+    message += L" invalid_size=1";
+    debug::DebugLog(std::move(message));
+    return;
+  }
+
+  std::vector<BYTE> buffer(static_cast<std::size_t>(size_result));
+  PRECONVERTSTRING reconvert_string =
+      reinterpret_cast<PRECONVERTSTRING>(buffer.data());
+  reconvert_string->dwSize = static_cast<DWORD>(buffer.size());
+  reconvert_string->dwVersion = 0;
+
+  DWORD_PTR fill_result = 0;
+  SetLastError(ERROR_SUCCESS);
+  const bool fill_sent = SendMessageTimeoutW(
+      hwnd, WM_IME_REQUEST, static_cast<WPARAM>(IMR_DOCUMENTFEED),
+      reinterpret_cast<LPARAM>(reconvert_string),
+      SMTO_ABORTIFHUNG | SMTO_BLOCK, kProbeTimeoutMs, &fill_result) != 0;
+  const DWORD fill_error = GetLastError();
+  message += L" fill_sent=" + std::to_wstring(fill_sent ? 1 : 0) +
+             L" fill_result=" + std::to_wstring(fill_result) +
+             L" fill_error=0x" + FormatHex(fill_error);
+  if (!fill_sent || fill_result == 0) {
+    debug::DebugLog(std::move(message));
+    return;
+  }
+
+  const ReconvertDocumentFeed feed =
+      DecomposeReconvertDocumentFeed(reconvert_string);
+  const std::wstring full_text =
+      feed.preceding_text + feed.preceding_composition + feed.target +
+      feed.following_composition + feed.following_text;
+  const bool preceding_ends_preedit =
+      EndsWithText(feed.preceding_text, current_preedit);
+  const bool full_ends_preedit = EndsWithText(full_text, current_preedit);
+  message += L" rs_size=" + std::to_wstring(reconvert_string->dwSize) +
+             L" rs_version=" + std::to_wstring(reconvert_string->dwVersion) +
+             L" str_len=" + std::to_wstring(reconvert_string->dwStrLen) +
+             L" str_offset=" + std::to_wstring(reconvert_string->dwStrOffset) +
+             L" comp_len=" + std::to_wstring(reconvert_string->dwCompStrLen) +
+             L" comp_offset=" +
+             std::to_wstring(reconvert_string->dwCompStrOffset) +
+             L" target_len=" +
+             std::to_wstring(reconvert_string->dwTargetStrLen) +
+             L" target_offset=" +
+             std::to_wstring(reconvert_string->dwTargetStrOffset) +
+             L" valid=" + std::to_wstring(feed.valid ? 1 : 0);
+  if (feed.valid) {
+    message += L" preceding=\"" + EscapeTextForLog(feed.preceding_text) +
+               L"\" precomp=\"" +
+               EscapeTextForLog(feed.preceding_composition) +
+               L"\" target=\"" + EscapeTextForLog(feed.target) +
+               L"\" followcomp=\"" +
+               EscapeTextForLog(feed.following_composition) +
+               L"\" following=\"" + EscapeTextForLog(feed.following_text) +
+               L"\" preceding_ends_preedit=" +
+               std::to_wstring(preceding_ends_preedit ? 1 : 0) +
+               L" full_ends_preedit=" +
+               std::to_wstring(full_ends_preedit ? 1 : 0);
+  }
+
+  debug::DebugLog(std::move(message));
+}
+
+void LogTransitoryFallbackProbe(ITfContext* context, const wchar_t* origin,
+                                std::wstring_view current_preedit) {
+  if (!IsContextTransitory(context)) {
+    return;
+  }
+
+  LogTransitoryParentProbe(context, origin);
+  LogImmDocumentFeedProbe(context, origin, current_preedit);
 }
 
 #endif
@@ -917,6 +1561,8 @@ STDMETHODIMP TipTextService::QueryInterface(REFIID riid, void** ppv) {
     *ppv = static_cast<ITfThreadFocusSink*>(this);
   } else if (riid == IID_ITfCompartmentEventSink) {
     *ppv = static_cast<ITfCompartmentEventSink*>(this);
+  } else if (riid == IID_ITfActiveLanguageProfileNotifySink) {
+    *ppv = static_cast<ITfActiveLanguageProfileNotifySink*>(this);
   } else if (riid == IID_ITfDisplayAttributeProvider) {
     *ppv = static_cast<ITfDisplayAttributeProvider*>(this);
   }
@@ -959,7 +1605,8 @@ STDMETHODIMP TipTextService::ActivateEx(ITfThreadMgr* thread_mgr,
                   L" secure=" +
                   std::to_wstring((flags & TF_TMAE_SECUREMODE) ? 1 : 0) +
                   L" comless=" +
-                  std::to_wstring((flags & TF_TMAE_COMLESS) ? 1 : 0));
+                  std::to_wstring((flags & TF_TMAE_COMLESS) ? 1 : 0) +
+                  L" " + ForegroundWindowDiagnostics());
 #endif
   if (thread_mgr == nullptr) {
     return E_INVALIDARG;
@@ -990,6 +1637,15 @@ STDMETHODIMP TipTextService::ActivateEx(ITfThreadMgr* thread_mgr,
   debug::DebugLog(L"[MilkyWayIME][ActivateEx][AdviseThreadFocusSink] hr=0x" +
                   FormatHex(static_cast<std::uint32_t>(hr)) +
                   L" cookie=" + std::to_wstring(thread_focus_sink_cookie_));
+#endif
+
+  hr = AdviseActiveLanguageProfileNotifySink();
+#if defined(_DEBUG)
+  debug::DebugLog(
+      L"[MilkyWayIME][ActivateEx][AdviseActiveLanguageProfileNotifySink] "
+      L"hr=0x" +
+      FormatHex(static_cast<std::uint32_t>(hr)) + L" cookie=" +
+      std::to_wstring(active_language_profile_notify_sink_cookie_));
 #endif
 
   hr = AdviseKeyEventSink();
@@ -1079,6 +1735,9 @@ STDMETHODIMP TipTextService::Deactivate() {
                            L"Deactivate");
   }
 
+  ResetTransitoryDirectTextComposition(L"Deactivate");
+  ResetNikkeDirectTextComposition(L"Deactivate");
+  ResetTransitoryCompositionBridge(L"Deactivate");
   ClearPendingKeyResult();
   edit_sink_.ClearPendingOperations();
   RemoveInputModeLanguageBarItem();
@@ -1086,6 +1745,7 @@ STDMETHODIMP TipTextService::Deactivate() {
   UnregisterPreservedKeys();
   UnadviseKeyboardOpenCloseCompartmentSink();
   UnadviseKeyEventSink();
+  UnadviseActiveLanguageProfileNotifySink();
   UnadviseThreadFocusSink();
   UnadviseThreadMgrEventSink();
   ClearCompositionTracking();
@@ -1111,13 +1771,15 @@ STDMETHODIMP TipTextService::OnUninitDocumentMgr(ITfDocumentMgr*) {
 }
 
 STDMETHODIMP TipTextService::OnSetFocus(ITfDocumentMgr* focused,
-                                        ITfDocumentMgr*) {
+                                        ITfDocumentMgr* previous) {
 #if defined(_DEBUG)
   debug::DebugLog(L"[MilkyWayIME][OnSetFocus(DocumentMgr)] process=" +
                   CurrentProcessName() + L" focused=" +
-                  PointerToString(focused) + L" current_text_context=" +
+                  PointerToString(focused) + L" previous=" +
+                  PointerToString(previous) + L" current_text_context=" +
                   PointerToString(text_edit_sink_context_) + L" composing=" +
-                  std::to_wstring(session_.IsComposing() ? 1 : 0));
+                  std::to_wstring(session_.IsComposing() ? 1 : 0) +
+                  L" " + ForegroundWindowDiagnostics());
 #endif
   if (candidate_list_ != nullptr) {
     CloseCandidateList();
@@ -1128,6 +1790,9 @@ STDMETHODIMP TipTextService::OnSetFocus(ITfDocumentMgr* focused,
                            EditSessionRequestPolicy::kSyncPreferredWrite,
                            L"OnSetFocus(DocumentMgr)");
   }
+  ResetTransitoryDirectTextComposition(L"OnSetFocus(DocumentMgr)");
+  ResetNikkeDirectTextComposition(L"OnSetFocus(DocumentMgr)");
+  ResetTransitoryCompositionBridge(L"OnSetFocus(DocumentMgr)");
 
   const HRESULT refresh_hr = RefreshFocusedContext(focused);
   if (SUCCEEDED(refresh_hr)) {
@@ -1136,9 +1801,12 @@ STDMETHODIMP TipTextService::OnSetFocus(ITfDocumentMgr* focused,
   return refresh_hr;
 }
 
-STDMETHODIMP TipTextService::OnPushContext(ITfContext*) {
+STDMETHODIMP TipTextService::OnPushContext(ITfContext* context) {
 #if defined(_DEBUG)
-  debug::DebugLog(L"[MilkyWayIME][OnPushContext]");
+  debug::DebugLog(L"[MilkyWayIME][OnPushContext] context=" +
+                  PointerToString(context) + L" " +
+                  ContextDiagnostics(context) + L" " +
+                  ForegroundWindowDiagnostics());
 #endif
   const HRESULT refresh_hr = RefreshFocusedContext();
   if (SUCCEEDED(refresh_hr)) {
@@ -1147,9 +1815,12 @@ STDMETHODIMP TipTextService::OnPushContext(ITfContext*) {
   return refresh_hr;
 }
 
-STDMETHODIMP TipTextService::OnPopContext(ITfContext*) {
+STDMETHODIMP TipTextService::OnPopContext(ITfContext* context) {
 #if defined(_DEBUG)
-  debug::DebugLog(L"[MilkyWayIME][OnPopContext]");
+  debug::DebugLog(L"[MilkyWayIME][OnPopContext] context=" +
+                  PointerToString(context) + L" " +
+                  ContextDiagnostics(context) + L" " +
+                  ForegroundWindowDiagnostics());
 #endif
   const HRESULT refresh_hr = RefreshFocusedContext();
   if (SUCCEEDED(refresh_hr)) {
@@ -1211,6 +1882,15 @@ STDMETHODIMP TipTextService::OnTestKeyDown(ITfContext* context, WPARAM wparam,
   const engine::state::ModifierState modifiers = QueryModifierState();
   const engine::key::NormalizedKeyEvent event = BuildNormalizedKeyEvent(
       wparam, lparam, modifiers, engine::key::KeyTransition::kPressed);
+
+#if defined(_DEBUG)
+  debug::DebugLog(
+      L"[MilkyWayIME][OnTestKeyDown] vk=0x" +
+      std::to_wstring(static_cast<std::uint16_t>(wparam)) + L" context=" +
+      PointerToString(context) + L" ime_open=" +
+      std::to_wstring(ime_open_ ? 1 : 0) + L" " +
+      ContextDiagnostics(context));
+#endif
 
   if (IsImeModeToggleVirtualKey(wparam)) {
 #if defined(_DEBUG)
@@ -1276,6 +1956,8 @@ STDMETHODIMP TipTextService::OnKeyDown(ITfContext* context, WPARAM wparam,
 #endif
     ClearPendingKeyResult();
     logic_.PrepareImeModeToggle();
+    ResetTransitoryDirectTextComposition(L"OnKeyDown(VK_HANGUL)");
+    ResetTransitoryCompositionBridge(L"OnKeyDown(VK_HANGUL)");
     if (!FinalizeImeModeToggle(context, L"OnKeyDown(VK_HANGUL)")) {
       SyncCompositionTermination();
     }
@@ -1331,9 +2013,18 @@ STDMETHODIMP TipTextService::OnKeyDown(ITfContext* context, WPARAM wparam,
   const bool reuse_pending = pending_key_result_.active &&
                              SameNormalizedKeyEvent(pending_key_result_.event, event);
   const bool pending_eaten = reuse_pending && pending_key_result_.eaten;
+  const bool composing_before = session_.IsComposing();
+  const bool has_tracked_composition_before = composition_ != nullptr;
   ClearPendingKeyResult();
   const KeyEventResult result =
       logic_.OnKeyEvent(key, modifiers, engine::key::KeyTransition::kPressed);
+  const bool composing_after_logic = session_.IsComposing();
+  const bool has_tracked_composition_after_logic = composition_ != nullptr;
+  const bool reset_transitory_direct_after_flush =
+      !composing_after_logic && transitory_direct_text_.IsActive();
+  if (!composing_after_logic && transitory_composition_bridge_.IsActive()) {
+    ResetTransitoryCompositionBridge(L"OnKeyDownCompositionEnded");
+  }
   const bool final_eaten = result.eaten || pending_eaten;
   *eaten = final_eaten ? TRUE : FALSE;
 
@@ -1359,6 +2050,20 @@ STDMETHODIMP TipTextService::OnKeyDown(ITfContext* context, WPARAM wparam,
                            std::to_wstring(pending_eaten ? 1 : 0) +
                            L" forward=" +
                            std::to_wstring(result.should_forward ? 1 : 0) +
+                           L" session_before=" +
+                           std::to_wstring(composing_before ? 1 : 0) +
+                           L" session_after_logic=" +
+                           std::to_wstring(composing_after_logic ? 1 : 0) +
+                           L" tracked_before=" +
+                           std::to_wstring(has_tracked_composition_before ? 1 : 0) +
+                           L" tracked_after_logic=" +
+                           std::to_wstring(
+                               has_tracked_composition_after_logic ? 1 : 0) +
+                           L" context=" + PointerToString(context) +
+                           L" " +
+                           CompositionTrackingState(
+                               L"tracked", composition_, composition_context_) +
+                           L" " + transitory_composition_bridge_.DebugState() +
                            L" shortcut=" +
                            ShortcutActionName(result.shortcut_action) +
                            L" commit=\"" + Utf8ToWide(result.commit_text) +
@@ -1366,8 +2071,15 @@ STDMETHODIMP TipTextService::OnKeyDown(ITfContext* context, WPARAM wparam,
                            L"\"";
     debug::DebugLog(std::move(message));
   }
+  if (composing_after_logic) {
+    LogTransitoryFallbackProbe(context, L"OnKeyDownAfterLogic",
+                               Utf8ToWide(result.preedit_text));
+  }
 #endif
 
+  if (result.shortcut_action != engine::shortcut::ShortcutAction::kNone) {
+    ResetTransitoryDirectTextComposition(L"OnKeyDownShortcut");
+  }
   if (edit_sink_.HasPendingOperations()) {
     const HRESULT hr = FlushPendingOperations(
         context, EditSessionRequestPolicy::kKeyPathWrite, L"OnKeyDown");
@@ -1375,6 +2087,9 @@ STDMETHODIMP TipTextService::OnKeyDown(ITfContext* context, WPARAM wparam,
       SyncCompositionTermination();
       return S_OK;
     }
+  }
+  if (reset_transitory_direct_after_flush) {
+    ResetTransitoryDirectTextComposition(L"OnKeyDownCompositionEnded");
   }
 
   HandleShortcutAction(context, result.shortcut_action);
@@ -1426,6 +2141,8 @@ STDMETHODIMP TipTextService::OnPreservedKey(ITfContext* context, REFGUID rguid,
                   std::to_wstring(ime_open_ ? 1 : 0));
 #endif
   logic_.PrepareImeModeToggle();
+  ResetTransitoryDirectTextComposition(L"OnPreservedKey(VK_HANGUL)");
+  ResetTransitoryCompositionBridge(L"OnPreservedKey(VK_HANGUL)");
   ITfContext* toggle_context =
       context != nullptr ? context : text_edit_sink_context_;
   if (!FinalizeImeModeToggle(toggle_context, L"OnPreservedKey(VK_HANGUL)")) {
@@ -1442,6 +2159,40 @@ STDMETHODIMP TipTextService::OnPreservedKey(ITfContext* context, REFGUID rguid,
 STDMETHODIMP TipTextService::OnCompositionTerminated(TfEditCookie edit_cookie,
                                                      ITfComposition* composition) {
   const bool tracked = composition_ == composition;
+  ITfContext* termination_context =
+      composition_context_ != nullptr ? composition_context_
+                                      : text_edit_sink_context_;
+  const edit::TransitoryCompositionBridgeSnapshot bridge_snapshot =
+      CaptureTransitoryBridgeSnapshot(
+          termination_context, session_.IsComposing(), tracked,
+          Utf8ToWide(session_.snapshot().preedit));
+  const bool suppress_engine_reset =
+      tracked &&
+      transitory_composition_bridge_.ShouldSuppressEngineReset(bridge_snapshot);
+  const bool observe_bridge_termination =
+      !suppress_engine_reset &&
+      transitory_composition_bridge_.ShouldObserveTermination(bridge_snapshot);
+  const bool should_reset_engine =
+      !suppress_engine_reset && (tracked || session_.IsComposing());
+#if defined(_DEBUG)
+  debug::DebugLog(
+      L"[MilkyWayIME][OnCompositionTerminated][Begin] process=" +
+      CurrentProcessName() + L" edit_cookie=0x" +
+      FormatHex(static_cast<std::uint32_t>(edit_cookie)) + L" incoming=" +
+      PointerToString(composition) + L" tracked=" +
+      std::to_wstring(tracked ? 1 : 0) + L" internal_engine_composing=" +
+      std::to_wstring(session_.IsComposing() ? 1 : 0) + L" " +
+      CompositionTrackingState(L"current", composition_, composition_context_) +
+      L" suppress_engine_reset=" +
+      std::to_wstring(suppress_engine_reset ? 1 : 0) +
+      L" observe_bridge_termination=" +
+      std::to_wstring(observe_bridge_termination ? 1 : 0) + L" " +
+      transitory_composition_bridge_.DebugState() + L" " +
+      TransitoryBridgeSnapshotDiagnostics(bridge_snapshot));
+  LogTransitoryFallbackProbe(termination_context,
+                             L"OnCompositionTerminatedBeforeReset",
+                             Utf8ToWide(session_.snapshot().preedit));
+#endif
   if (tracked) {
     CloseCandidateList();
     if (composition_context_ != nullptr) {
@@ -1450,10 +2201,30 @@ STDMETHODIMP TipTextService::OnCompositionTerminated(TfEditCookie edit_cookie,
     ClearCompositionTracking();
   }
 
-  if (tracked || session_.IsComposing()) {
-    logic_.OnCompositionTerminated();
+  if (suppress_engine_reset) {
+    transitory_composition_bridge_.NoteSuppressedEngineReset(bridge_snapshot,
+                                                            composition);
+  } else {
+    if (observe_bridge_termination) {
+      transitory_composition_bridge_.NoteObservedTermination(bridge_snapshot,
+                                                            composition);
+    }
+    if (should_reset_engine) {
+      ResetTransitoryCompositionBridge(L"OnCompositionTerminatedEngineReset");
+      logic_.OnCompositionTerminated();
+    } else {
+      ResetTransitoryCompositionBridge(L"OnCompositionTerminatedNoState");
+    }
   }
 
+#if defined(_DEBUG)
+  debug::DebugLog(
+      L"[MilkyWayIME][OnCompositionTerminated][End] tracked=" +
+      std::to_wstring(tracked ? 1 : 0) + L" internal_engine_composing=" +
+      std::to_wstring(session_.IsComposing() ? 1 : 0) + L" " +
+      CompositionTrackingState(L"current", composition_, composition_context_) +
+      L" " + transitory_composition_bridge_.DebugState());
+#endif
   return S_OK;
 }
 
@@ -1487,6 +2258,16 @@ STDMETHODIMP TipTextService::OnKillThreadFocus() {
                   std::to_wstring(session_.IsComposing() ? 1 : 0));
 #endif
   CloseCandidateList();
+  if (transitory_direct_text_.IsActive() && text_edit_sink_context_ != nullptr &&
+      session_.IsComposing()) {
+    logic_.OnFocusLost();
+    FlushPendingOperations(text_edit_sink_context_,
+                           EditSessionRequestPolicy::kSyncPreferredWrite,
+                           L"OnKillThreadFocus");
+  }
+  ResetTransitoryDirectTextComposition(L"OnKillThreadFocus");
+  ResetNikkeDirectTextComposition(L"OnKillThreadFocus");
+  ResetTransitoryCompositionBridge(L"OnKillThreadFocus");
   return S_OK;
 }
 
@@ -1506,6 +2287,36 @@ STDMETHODIMP TipTextService::OnChange(REFGUID guid) {
     debug::DebugLog(L"[MilkyWayIME][CompartmentEventSink::OnChange][SyncFailed] hr=0x" +
                     FormatHex(static_cast<std::uint32_t>(hr)));
   }
+#endif
+  return S_OK;
+}
+
+STDMETHODIMP TipTextService::OnActivated(REFCLSID clsid, REFGUID profile,
+                                         BOOL activated) {
+#if defined(_DEBUG)
+  ITfDocumentMgr* focused_document_mgr = nullptr;
+  HRESULT focus_hr = E_UNEXPECTED;
+  if (thread_mgr_ != nullptr) {
+    focus_hr = thread_mgr_->GetFocus(&focused_document_mgr);
+  }
+  const bool is_our_clsid =
+      IsEqualCLSID(clsid, registration::kTextServiceClsid) != FALSE;
+  const bool is_our_profile =
+      IsEqualGUID(profile, registration::kTextServiceProfileGuid) != FALSE;
+  debug::DebugLog(
+      L"[MilkyWayIME][ActiveLanguageProfileNotifySink::OnActivated] "
+      L"process=" +
+      CurrentProcessName() + L" activated=" +
+      std::to_wstring(activated ? 1 : 0) + L" clsid=" +
+      GuidToString(clsid) + L" profile=" + GuidToString(profile) +
+      L" our_clsid=" + std::to_wstring(is_our_clsid ? 1 : 0) +
+      L" our_profile=" + std::to_wstring(is_our_profile ? 1 : 0) +
+      L" focus_hr=0x" + FormatHex(static_cast<std::uint32_t>(focus_hr)) +
+      L" focused_docmgr=" + PointerToString(focused_document_mgr) +
+      L" text_context=" + PointerToString(text_edit_sink_context_) +
+      L" ime_open=" + std::to_wstring(ime_open_ ? 1 : 0) + L" " +
+      ForegroundWindowDiagnostics());
+  SafeRelease(focused_document_mgr);
 #endif
   return S_OK;
 }
@@ -1631,8 +2442,52 @@ TfClientId TipTextService::client_id() const {
   return client_id_;
 }
 
-bool TipTextService::HasActiveComposition() const {
+bool TipTextService::HasTrackedTsfComposition() const {
   return composition_ != nullptr;
+}
+
+bool TipTextService::ShouldUseTransitoryDirectTextComposition(
+    ITfContext* context,
+    const std::vector<edit::TextEditOperation>& operations) const {
+  return transitory_direct_text_.ShouldUse(context, operations);
+}
+
+ITfContext* TipTextService::ResolveTransitoryDirectTextContext(
+    ITfContext* context,
+    const std::vector<edit::TextEditOperation>& operations) const {
+  return transitory_direct_text_.ResolveFullContextFromTransitory(context,
+                                                                  operations);
+}
+
+HRESULT TipTextService::ApplyTransitoryDirectTextComposition(
+    TfEditCookie edit_cookie, ITfContext* context,
+    const std::vector<edit::TextEditOperation>& operations) {
+  return transitory_direct_text_.Apply(edit_cookie, context, operations);
+}
+
+void TipTextService::ResetTransitoryDirectTextComposition(
+    const wchar_t* reason) {
+  transitory_direct_text_.Reset(reason);
+}
+
+bool TipTextService::ShouldUseNikkeDirectTextComposition(
+    ITfContext* context,
+    const std::vector<edit::TextEditOperation>& operations) const {
+  return nikke_direct_text_.ShouldUse(context, operations);
+}
+
+HRESULT TipTextService::ApplyNikkeDirectTextComposition(
+    TfEditCookie edit_cookie, ITfContext* context,
+    const std::vector<edit::TextEditOperation>& operations) {
+  return nikke_direct_text_.Apply(edit_cookie, context, operations);
+}
+
+void TipTextService::ResetNikkeDirectTextComposition(const wchar_t* reason) {
+  nikke_direct_text_.Reset(reason);
+}
+
+void TipTextService::ResetTransitoryCompositionBridge(const wchar_t* reason) {
+  transitory_composition_bridge_.Reset(reason);
 }
 
 HRESULT TipTextService::CommitText(TfEditCookie edit_cookie, ITfContext* context,
@@ -1669,6 +2524,19 @@ HRESULT TipTextService::StartComposition(TfEditCookie edit_cookie,
   if (context == nullptr) {
     return E_INVALIDARG;
   }
+
+#if defined(_DEBUG)
+  const edit::TransitoryCompositionBridgeSnapshot bridge_snapshot_begin =
+      CaptureTransitoryBridgeSnapshot(context, session_.IsComposing(),
+                                      composition_ != nullptr, text);
+  debug::DebugLog(
+      L"[MilkyWayIME][StartComposition][Begin] context=" +
+      PointerToString(context) + L" text=\"" + text + L"\" session_composing=" +
+      std::to_wstring(session_.IsComposing() ? 1 : 0) + L" " +
+      CompositionTrackingState(L"current", composition_, composition_context_) +
+      L" " + transitory_composition_bridge_.DebugState() + L" " +
+      TransitoryBridgeSnapshotDiagnostics(bridge_snapshot_begin));
+#endif
 
   ITfInsertAtSelection* insert_at_selection = nullptr;
   ITfContextComposition* context_composition = nullptr;
@@ -1736,6 +2604,19 @@ HRESULT TipTextService::StartComposition(TfEditCookie edit_cookie,
   hr = S_OK;
 
 Exit:
+#if defined(_DEBUG)
+  const edit::TransitoryCompositionBridgeSnapshot bridge_snapshot_end =
+      CaptureTransitoryBridgeSnapshot(context, session_.IsComposing(),
+                                      composition_ != nullptr, text);
+  debug::DebugLog(
+      L"[MilkyWayIME][StartComposition][End] hr=0x" +
+      FormatHex(static_cast<std::uint32_t>(hr)) + L" started=" +
+      PointerToString(composition) + L" session_composing=" +
+      std::to_wstring(session_.IsComposing() ? 1 : 0) + L" " +
+      CompositionTrackingState(L"current", composition_, composition_context_) +
+      L" " + transitory_composition_bridge_.DebugState() + L" " +
+      TransitoryBridgeSnapshotDiagnostics(bridge_snapshot_end));
+#endif
   SafeRelease(composition_range);
   SafeRelease(composition);
   SafeRelease(insertion_range);
@@ -1747,12 +2628,30 @@ Exit:
 HRESULT TipTextService::UpdateComposition(TfEditCookie edit_cookie,
                                           const std::wstring& text) {
   if (composition_ == nullptr) {
+#if defined(_DEBUG)
+    debug::DebugLog(
+        L"[MilkyWayIME][UpdateComposition][NoTrackedComposition] text=\"" +
+        text + L"\" session_composing=" +
+        std::to_wstring(session_.IsComposing() ? 1 : 0));
+#endif
     return E_UNEXPECTED;
   }
+
+#if defined(_DEBUG)
+  debug::DebugLog(
+      L"[MilkyWayIME][UpdateComposition][Begin] text=\"" + text +
+      L"\" session_composing=" +
+      std::to_wstring(session_.IsComposing() ? 1 : 0) + L" " +
+      CompositionTrackingState(L"current", composition_, composition_context_));
+#endif
 
   ITfRange* composition_range = nullptr;
   HRESULT hr = composition_->GetRange(&composition_range);
   if (FAILED(hr)) {
+#if defined(_DEBUG)
+    debug::DebugLog(L"[MilkyWayIME][UpdateComposition][GetRangeFailed] hr=0x" +
+                    FormatHex(static_cast<std::uint32_t>(hr)));
+#endif
     return hr;
   }
 
@@ -1776,13 +2675,32 @@ HRESULT TipTextService::UpdateComposition(TfEditCookie edit_cookie,
   }
 
   composition_range->Release();
+#if defined(_DEBUG)
+  debug::DebugLog(
+      L"[MilkyWayIME][UpdateComposition][End] hr=0x" +
+      FormatHex(static_cast<std::uint32_t>(hr)) + L" session_composing=" +
+      std::to_wstring(session_.IsComposing() ? 1 : 0) + L" " +
+      CompositionTrackingState(L"current", composition_, composition_context_));
+#endif
   return hr;
 }
 
 HRESULT TipTextService::CompleteComposition(TfEditCookie edit_cookie) {
   if (composition_ == nullptr) {
+#if defined(_DEBUG)
+    debug::DebugLog(L"[MilkyWayIME][CompleteComposition][NoTrackedComposition] "
+                    L"session_composing=" +
+                    std::to_wstring(session_.IsComposing() ? 1 : 0));
+#endif
     return S_FALSE;
   }
+
+#if defined(_DEBUG)
+  debug::DebugLog(
+      L"[MilkyWayIME][CompleteComposition][Begin] session_composing=" +
+      std::to_wstring(session_.IsComposing() ? 1 : 0) + L" " +
+      CompositionTrackingState(L"current", composition_, composition_context_));
+#endif
 
   ITfComposition* composition = composition_;
   composition->AddRef();
@@ -1792,10 +2710,24 @@ HRESULT TipTextService::CompleteComposition(TfEditCookie edit_cookie) {
   ClearCompositionTracking();
   const HRESULT hr = composition->EndComposition(edit_cookie);
   composition->Release();
+#if defined(_DEBUG)
+  debug::DebugLog(
+      L"[MilkyWayIME][CompleteComposition][End] hr=0x" +
+      FormatHex(static_cast<std::uint32_t>(hr)) + L" session_composing=" +
+      std::to_wstring(session_.IsComposing() ? 1 : 0) + L" " +
+      CompositionTrackingState(L"current", composition_, composition_context_));
+#endif
   return hr;
 }
 
 void TipTextService::ClearCompositionTracking() {
+#if defined(_DEBUG)
+  if (composition_ != nullptr || composition_context_ != nullptr) {
+    debug::DebugLog(L"[MilkyWayIME][ClearCompositionTracking] " +
+                    CompositionTrackingState(L"previous", composition_,
+                                             composition_context_));
+  }
+#endif
   SafeRelease(composition_);
   SafeRelease(composition_context_);
 }
@@ -1899,6 +2831,48 @@ void TipTextService::UnadviseKeyEventSink() {
     keystroke_mgr->UnadviseKeyEventSink(client_id_);
     keystroke_mgr->Release();
   }
+}
+
+HRESULT TipTextService::AdviseActiveLanguageProfileNotifySink() {
+  if (thread_mgr_ == nullptr) {
+    return E_UNEXPECTED;
+  }
+  if (active_language_profile_notify_sink_cookie_ != TF_INVALID_COOKIE) {
+    return S_OK;
+  }
+
+  ITfSource* source = nullptr;
+  const HRESULT hr = thread_mgr_->QueryInterface(
+      IID_ITfSource, reinterpret_cast<void**>(&source));
+  if (FAILED(hr)) {
+    return hr;
+  }
+
+  const HRESULT advise_hr = source->AdviseSink(
+      IID_ITfActiveLanguageProfileNotifySink,
+      static_cast<ITfActiveLanguageProfileNotifySink*>(this),
+      &active_language_profile_notify_sink_cookie_);
+  source->Release();
+  if (FAILED(advise_hr)) {
+    active_language_profile_notify_sink_cookie_ = TF_INVALID_COOKIE;
+  }
+  return advise_hr;
+}
+
+void TipTextService::UnadviseActiveLanguageProfileNotifySink() {
+  if (thread_mgr_ == nullptr ||
+      active_language_profile_notify_sink_cookie_ == TF_INVALID_COOKIE) {
+    return;
+  }
+
+  ITfSource* source = nullptr;
+  if (SUCCEEDED(thread_mgr_->QueryInterface(IID_ITfSource,
+                                            reinterpret_cast<void**>(&source)))) {
+    source->UnadviseSink(active_language_profile_notify_sink_cookie_);
+    source->Release();
+  }
+
+  active_language_profile_notify_sink_cookie_ = TF_INVALID_COOKIE;
 }
 
 HRESULT TipTextService::AdviseKeyboardOpenCloseCompartmentSink() {
@@ -2039,7 +3013,7 @@ HRESULT TipTextService::RefreshFocusedContext(ITfDocumentMgr* document_mgr) {
   debug::DebugLog(L"[MilkyWayIME][RefreshFocusedContext][Begin] requested_docmgr=" +
                   PointerToString(document_mgr) + L" thread_mgr=" +
                   PointerToString(thread_mgr_) + L" process=" +
-                  CurrentProcessName());
+                  CurrentProcessName() + L" " + ForegroundWindowDiagnostics());
 #endif
   ITfDocumentMgr* focused_document_mgr = document_mgr;
   bool release_document_mgr = false;
@@ -2063,7 +3037,8 @@ HRESULT TipTextService::RefreshFocusedContext(ITfDocumentMgr* document_mgr) {
 
   if (focused_document_mgr == nullptr) {
 #if defined(_DEBUG)
-    debug::DebugLog(L"[MilkyWayIME][RefreshFocusedContext][NoFocusedDocument]");
+    debug::DebugLog(L"[MilkyWayIME][RefreshFocusedContext][NoFocusedDocument] " +
+                    ForegroundWindowDiagnostics());
 #endif
     DetachTextEditSink();
     return S_OK;
@@ -2078,7 +3053,8 @@ HRESULT TipTextService::RefreshFocusedContext(ITfDocumentMgr* document_mgr) {
 #if defined(_DEBUG)
     debug::DebugLog(L"[MilkyWayIME][RefreshFocusedContext][GetTopFailed] docmgr=" +
                     PointerToString(focused_document_mgr) + L" hr=0x" +
-                    FormatHex(static_cast<std::uint32_t>(hr)));
+                    FormatHex(static_cast<std::uint32_t>(hr)) + L" " +
+                    ForegroundWindowDiagnostics());
 #endif
     DetachTextEditSink();
     return hr;
@@ -2089,7 +3065,8 @@ HRESULT TipTextService::RefreshFocusedContext(ITfDocumentMgr* document_mgr) {
   debug::DebugLog(L"[MilkyWayIME][RefreshFocusedContext][End] focused_docmgr=" +
                   PointerToString(focused_document_mgr) + L" context=" +
                   PointerToString(context) + L" attach_hr=0x" +
-                  FormatHex(static_cast<std::uint32_t>(attach_hr)));
+                  FormatHex(static_cast<std::uint32_t>(attach_hr)) + L" " +
+                  ContextDiagnostics(context));
 #endif
   context->Release();
   return attach_hr;
@@ -2143,6 +3120,9 @@ HRESULT TipTextService::AttachTextEditSink(ITfContext* context) {
 }
 
 void TipTextService::DetachTextEditSink() {
+  ResetTransitoryDirectTextComposition(L"DetachTextEditSink");
+  ResetNikkeDirectTextComposition(L"DetachTextEditSink");
+  ResetTransitoryCompositionBridge(L"DetachTextEditSink");
   ITfContext* previous_context = text_edit_sink_context_;
   const DWORD previous_cookie = text_edit_sink_cookie_;
   if (text_edit_sink_context_ != nullptr &&
@@ -2222,6 +3202,9 @@ HRESULT TipTextService::FlushPendingOperations(ITfContext* context,
                     L" hr=0x" +
                     FormatHex(static_cast<std::uint32_t>(hr)));
 #endif
+    ResetTransitoryDirectTextComposition(L"FlushPendingOperationsFailed");
+    ResetNikkeDirectTextComposition(L"FlushPendingOperationsFailed");
+    ResetTransitoryCompositionBridge(L"FlushPendingOperationsFailed");
     edit_sink_.ClearPendingOperations();
   }
   return hr;
@@ -2346,6 +3329,10 @@ HRESULT TipTextService::SyncImeOpenFromCompartment(const wchar_t* origin) {
   ime_open_ = open;
   if (input_mode_lang_bar_item_ != nullptr) {
     input_mode_lang_bar_item_->OnImeOpenChanged(open);
+  }
+  if (!open) {
+    ResetTransitoryDirectTextComposition(L"SyncImeOpenFromCompartment(Closed)");
+    ResetTransitoryCompositionBridge(L"SyncImeOpenFromCompartment(Closed)");
   }
   return S_OK;
 }
@@ -2485,6 +3472,8 @@ void TipTextService::ApplyLayoutSelection(
   }
 
   ClearPendingKeyResult();
+  ResetTransitoryDirectTextComposition(L"ApplyLayoutSelection");
+  ResetTransitoryCompositionBridge(L"ApplyLayoutSelection");
   CloseCandidateList();
   if (logic_.PrepareLayoutChange()) {
     if (text_edit_sink_context_ != nullptr) {
@@ -2565,6 +3554,8 @@ bool TipTextService::FinalizeImeModeToggle(ITfContext* context,
 
 void TipTextService::ToggleImeModeFromLanguageBar() {
   logic_.PrepareImeModeToggle();
+  ResetTransitoryDirectTextComposition(L"LangBarClick");
+  ResetTransitoryCompositionBridge(L"LangBarClick");
   if (!FinalizeImeModeToggle(text_edit_sink_context_, L"LangBarClick")) {
     SyncCompositionTermination();
   }
@@ -3360,10 +4351,27 @@ HRESULT TipTextService::ApplyCompositionDisplayAttribute(
 }
 
 void TipTextService::SyncCompositionTermination() {
+#if defined(_DEBUG)
+  debug::DebugLog(
+      L"[MilkyWayIME][SyncCompositionTermination][Begin] session_composing=" +
+      std::to_wstring(session_.IsComposing() ? 1 : 0) +
+      L" pending_operations=" +
+      std::to_wstring(edit_sink_.PendingOperationCount()) + L" " +
+      CompositionTrackingState(L"current", composition_, composition_context_));
+#endif
   ClearPendingKeyResult();
   edit_sink_.ClearPendingOperations();
   ClearCompositionTracking();
+  ResetTransitoryDirectTextComposition(L"SyncCompositionTermination");
+  ResetNikkeDirectTextComposition(L"SyncCompositionTermination");
+  ResetTransitoryCompositionBridge(L"SyncCompositionTermination");
   logic_.OnCompositionTerminated();
+#if defined(_DEBUG)
+  debug::DebugLog(
+      L"[MilkyWayIME][SyncCompositionTermination][End] session_composing=" +
+      std::to_wstring(session_.IsComposing() ? 1 : 0) + L" " +
+      CompositionTrackingState(L"current", composition_, composition_context_));
+#endif
 }
 
 void TipTextService::ClearPendingKeyResult() {

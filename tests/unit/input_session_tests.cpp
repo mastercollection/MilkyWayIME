@@ -28,6 +28,8 @@
 #include "hangul.h"
 #include "tsf/edit/text_edit_sink.h"
 #include "tsf/edit/text_edit_plan.h"
+#include "tsf/edit/transitory_composition_bridge.h"
+#include "tsf/edit/transitory_direct_text_composition.h"
 #include "tsf/service/text_service.h"
 #include "tsf/settings/user_settings.h"
 #include "ui/candidate/candidate_theme.h"
@@ -1673,6 +1675,174 @@ void TestTextEditPlanPreservesEmptyCompositionUpdateBeforeCompletion() {
   assert(plan[1].type == PlannedEditActionType::kCompleteComposition);
 }
 
+void TestTransitoryDirectTextCompositionGateAndPlan() {
+  using milkyway::tsf::edit::BuildTransitoryDirectTextOperationPlan;
+  using milkyway::tsf::edit::ShouldUseTransitoryDirectTextComposition;
+  using milkyway::tsf::edit::TransitoryDirectTextTarget;
+
+  const TransitoryDirectTextTarget rider_target{
+      L"rider64.exe", L"SunAwtDialog", true};
+  const TransitoryDirectTextTarget other_popup{
+      L"rider64.exe", L"SunAwtFrame", true};
+  const TransitoryDirectTextTarget rider_not_transitory{
+      L"rider64.exe", L"SunAwtDialog", false};
+  const TransitoryDirectTextTarget nikke_target{
+      L"NIKKE.exe", L"UnityWndClass", true};
+  const TransitoryDirectTextTarget perforce_popup{
+      L"p4v.exe", L"Qt5152QWindowIcon", true};
+
+  const std::vector<TextEditOperation> commit_only = {
+      {TextEditOperationType::kCommitText, "a"}};
+  assert(!ShouldUseTransitoryDirectTextComposition(rider_target, commit_only,
+                                                   false));
+  assert(ShouldUseTransitoryDirectTextComposition(rider_target, commit_only,
+                                                  true));
+  assert(ShouldUseTransitoryDirectTextComposition(other_popup, commit_only,
+                                                  true));
+  assert(!ShouldUseTransitoryDirectTextComposition(rider_not_transitory,
+                                                   commit_only, true));
+  assert(ShouldUseTransitoryDirectTextComposition(nikke_target, commit_only,
+                                                  true));
+  assert(ShouldUseTransitoryDirectTextComposition(perforce_popup, commit_only,
+                                                  true));
+
+  constexpr const char* kPieup = "\xE3\x85\x8D";
+  constexpr const char* kPo = "\xED\x8F\xAC";
+  constexpr const char* kPon = "\xED\x8F\xB0";
+  constexpr const char* kTieut = "\xE3\x85\x8C";
+  constexpr const char* kTeu = "\xED\x8A\xB8";
+
+  const std::vector<TextEditOperation> start_preedit = {
+      {TextEditOperationType::kStartComposition, kPieup}};
+  assert(ShouldUseTransitoryDirectTextComposition(rider_target, start_preedit,
+                                                  false));
+  assert(ShouldUseTransitoryDirectTextComposition(nikke_target, start_preedit,
+                                                  false));
+  assert(ShouldUseTransitoryDirectTextComposition(perforce_popup,
+                                                  start_preedit, false));
+  assert(!ShouldUseTransitoryDirectTextComposition(rider_not_transitory,
+                                                   start_preedit, false));
+  auto start_plan = BuildTransitoryDirectTextOperationPlan(start_preedit);
+  assert(start_plan.commit_text.empty());
+  assert(start_plan.preedit_text == kPieup);
+  assert(start_plan.has_preedit);
+  assert(start_plan.has_composition_operation);
+
+  const std::vector<TextEditOperation> update_po = {
+      {TextEditOperationType::kUpdateComposition, kPo}};
+  auto update_po_plan = BuildTransitoryDirectTextOperationPlan(update_po);
+  assert(update_po_plan.commit_text.empty());
+  assert(update_po_plan.preedit_text == kPo);
+  assert(update_po_plan.has_preedit);
+
+  const std::vector<TextEditOperation> update_pon = {
+      {TextEditOperationType::kUpdateComposition, kPon}};
+  auto update_pon_plan = BuildTransitoryDirectTextOperationPlan(update_pon);
+  assert(update_pon_plan.commit_text.empty());
+  assert(update_pon_plan.preedit_text == kPon);
+  assert(update_pon_plan.has_preedit);
+
+  const std::vector<TextEditOperation> commit_and_next_preedit = {
+      {TextEditOperationType::kCommitText, kPon},
+      {TextEditOperationType::kUpdateComposition, kTieut}};
+  auto commit_and_next_preedit_plan =
+      BuildTransitoryDirectTextOperationPlan(commit_and_next_preedit);
+  assert(commit_and_next_preedit_plan.commit_text == kPon);
+  assert(commit_and_next_preedit_plan.preedit_text == kTieut);
+  assert(commit_and_next_preedit_plan.has_preedit);
+
+  const std::vector<TextEditOperation> update_teu = {
+      {TextEditOperationType::kUpdateComposition, kTeu}};
+  auto update_teu_plan = BuildTransitoryDirectTextOperationPlan(update_teu);
+  assert(update_teu_plan.commit_text.empty());
+  assert(update_teu_plan.preedit_text == kTeu);
+  assert(update_teu_plan.has_preedit);
+
+  const std::vector<TextEditOperation> end_only = {
+      {TextEditOperationType::kEndComposition, {}}};
+  assert(ShouldUseTransitoryDirectTextComposition(rider_target, end_only,
+                                                  true));
+  auto end_plan = BuildTransitoryDirectTextOperationPlan(end_only);
+  assert(end_plan.commit_text.empty());
+  assert(end_plan.preedit_text.empty());
+  assert(!end_plan.has_preedit);
+  assert(end_plan.end_requested);
+}
+
+void TestTransitoryCompositionBridgeGateAndState() {
+  using milkyway::tsf::edit::GetTransitoryCompositionBridgeTargetKind;
+  using milkyway::tsf::edit::ShouldSuppressTransitoryCompositionEngineReset;
+  using milkyway::tsf::edit::TransitoryCompositionBridge;
+  using milkyway::tsf::edit::TransitoryCompositionBridgeSnapshot;
+  using milkyway::tsf::edit::TransitoryCompositionBridgeTarget;
+  using milkyway::tsf::edit::TransitoryCompositionBridgeTargetKind;
+
+  const TransitoryCompositionBridgeTarget rider_target{
+      L"rider64.exe", L"SunAwtDialog", true};
+  const TransitoryCompositionBridgeTarget other_popup{
+      L"rider64.exe", L"SunAwtFrame", true};
+  const TransitoryCompositionBridgeTarget rider_not_transitory{
+      L"rider64.exe", L"SunAwtDialog", false};
+  const TransitoryCompositionBridgeTarget nikke_target{
+      L"NIKKE.exe", L"UnityWndClass", true};
+  const TransitoryCompositionBridgeTarget perforce_popup{
+      L"p4v.exe", L"Qt5152QWindowIcon", true};
+
+  assert(GetTransitoryCompositionBridgeTargetKind(rider_target) ==
+         TransitoryCompositionBridgeTargetKind::kSuppressEngineReset);
+  assert(GetTransitoryCompositionBridgeTargetKind(other_popup) ==
+         TransitoryCompositionBridgeTargetKind::kSuppressEngineReset);
+  assert(GetTransitoryCompositionBridgeTargetKind(rider_not_transitory) ==
+         TransitoryCompositionBridgeTargetKind::kNone);
+  assert(GetTransitoryCompositionBridgeTargetKind(nikke_target) ==
+         TransitoryCompositionBridgeTargetKind::kSuppressEngineReset);
+  assert(GetTransitoryCompositionBridgeTargetKind(perforce_popup) ==
+         TransitoryCompositionBridgeTargetKind::kSuppressEngineReset);
+
+  TransitoryCompositionBridgeSnapshot snapshot;
+  snapshot.target = rider_target;
+  snapshot.context = reinterpret_cast<ITfContext*>(0x1234);
+  snapshot.view_hwnd = reinterpret_cast<HWND>(0x5678);
+  snapshot.internal_composing = true;
+  snapshot.has_tracked_tsf_composition = true;
+  snapshot.preedit = L"포";
+
+  assert(ShouldSuppressTransitoryCompositionEngineReset(snapshot));
+
+  TransitoryCompositionBridgeSnapshot not_composing = snapshot;
+  not_composing.internal_composing = false;
+  assert(!ShouldSuppressTransitoryCompositionEngineReset(not_composing));
+
+  TransitoryCompositionBridgeSnapshot no_tracked_composition = snapshot;
+  no_tracked_composition.has_tracked_tsf_composition = false;
+  assert(!ShouldSuppressTransitoryCompositionEngineReset(
+      no_tracked_composition));
+
+  TransitoryCompositionBridgeSnapshot not_transitory = snapshot;
+  not_transitory.target = rider_not_transitory;
+  assert(!ShouldSuppressTransitoryCompositionEngineReset(not_transitory));
+
+  TransitoryCompositionBridgeSnapshot nikke_snapshot = snapshot;
+  nikke_snapshot.target = nikke_target;
+  assert(ShouldSuppressTransitoryCompositionEngineReset(nikke_snapshot));
+
+  TransitoryCompositionBridge bridge;
+  assert(!bridge.IsActive());
+  assert(bridge.suppressed_termination_count() == 0);
+  assert(bridge.ShouldSuppressEngineReset(snapshot));
+  assert(bridge.ShouldSuppressEngineReset(nikke_snapshot));
+  assert(!bridge.ShouldObserveTermination(nikke_snapshot));
+
+  bridge.NoteSuppressedEngineReset(
+      snapshot, reinterpret_cast<ITfComposition*>(0x9999));
+  assert(bridge.IsActive());
+  assert(bridge.suppressed_termination_count() == 1);
+
+  bridge.Reset(L"unit_test");
+  assert(!bridge.IsActive());
+  assert(bridge.suppressed_termination_count() == 0);
+}
+
 void TestCandidateThemeSelection() {
   using milkyway::ui::candidate::CandidateThemeMode;
   using milkyway::ui::candidate::ChooseCandidateThemeMode;
@@ -1766,6 +1936,8 @@ int main() {
   TestTextEditPlanPreservesReorderedSyllableCommit();
   TestTextEditPlanCompletesCommittedCompositionText();
   TestTextEditPlanPreservesEmptyCompositionUpdateBeforeCompletion();
+  TestTransitoryDirectTextCompositionGateAndPlan();
+  TestTransitoryCompositionBridgeGateAndState();
   TestCandidateThemeSelection();
   TestCandidateWindowPlacement();
 
