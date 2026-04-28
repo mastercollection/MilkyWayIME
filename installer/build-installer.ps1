@@ -56,8 +56,6 @@ if (-not $SkipSolutionBuild) {
 
 $requiredFiles = @(
     "build\MilkyWayIME.Tsf\x64\$Configuration\mwime_tsf.dll",
-    "external\libhangul\data\hanja\hanja.bin",
-    "external\libhangul\data\hanja\mssymbol.bin",
     "data\layouts\base\us_qwerty.json",
     "data\layouts\base\colemak.json"
 )

@@ -2,19 +2,18 @@
 
 MilkyWayIME uses libhangul's bundled Hanja data for candidate generation.
 
-Runtime builds load these files from the installed TSF DLL directory first:
+Runtime builds search committed static C++ tables in
+`src\adapters\dictionary\generated_hanja_data.cpp`. They do not load
+`hanja.bin`, `mssymbol.bin`, or the text sources at startup or lookup time.
+Lookup remains exact dictionary lookup and does not do morphology or
+selection-internal search.
 
-- `data\hanja\hanja.bin`
-- `data\hanja\mssymbol.bin`
-
-The source-tree files under `external\libhangul\data\hanja` remain the developer
-generation and packaging source. `hanja.bin` contains forward and reverse
-indexes; `mssymbol.bin` contains the forward index. Runtime lookup does not load
-the text files as a fallback. Lookup remains exact dictionary lookup and does
-not do morphology or selection-internal search.
-
-Regenerate the binary caches from an elevated Visual Studio/MSBuild environment:
+The source-tree files under `external\libhangul\data\hanja` are developer inputs
+for regenerating the committed C++ table:
 
 ```cmd
-tools\generate-hanja-cache.cmd
+tools\generate-static-hanja.cmd
 ```
+
+Commit the regenerated C++ file with any source data change. ProgramData or
+DLL-adjacent runtime Hanja data replacement is no longer supported.

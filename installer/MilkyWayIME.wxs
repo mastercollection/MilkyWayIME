@@ -89,29 +89,8 @@
       </Directory>
     </StandardDirectory>
 
-    <StandardDirectory Id="CommonAppDataFolder">
-      <Directory Id="ProgramDataMilkyWayFolder" Name="MilkyWayIME">
-        <Directory Id="ProgramDataDataFolder" Name="data">
-          <Directory Id="ProgramDataHanjaDataFolder" Name="hanja">
-            <Component Id="CmpHanjaBin" Guid="*">
-              <File Id="FileHanjaBin"
-                    Source="$(var.RepoRoot)external\libhangul\data\hanja\hanja.bin"
-                    KeyPath="yes" />
-            </Component>
-            <Component Id="CmpMsSymbolBin" Guid="*">
-              <File Id="FileMsSymbolBin"
-                    Source="$(var.RepoRoot)external\libhangul\data\hanja\mssymbol.bin"
-                    KeyPath="yes" />
-            </Component>
-          </Directory>
-        </Directory>
-      </Directory>
-    </StandardDirectory>
-
     <Feature Id="FeatureMain" Title="MilkyWayIME" Level="1">
       <ComponentRef Id="CmpTsfDll" />
-      <ComponentRef Id="CmpHanjaBin" />
-      <ComponentRef Id="CmpMsSymbolBin" />
       <ComponentRef Id="CmpUsQwertyLayoutJson" />
       <ComponentRef Id="CmpColemakLayoutJson" />
     </Feature>

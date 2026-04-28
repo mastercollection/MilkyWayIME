@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project>
+  <PropertyGroup>
+    <MWIME_SKIP_HANJA_CACHE_POSTBUILD Condition="'$(MWIME_SKIP_HANJA_CACHE_POSTBUILD)' == ''">1</MWIME_SKIP_HANJA_CACHE_POSTBUILD>
+  </PropertyGroup>
+</Project>

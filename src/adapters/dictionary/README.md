@@ -2,9 +2,17 @@
 
 Dictionary and Hanja data source adapters should be isolated here.
 
-The current adapter wraps libhangul `HanjaTable` ownership and lookup. It keeps
-the engine-facing candidate model free from libhangul headers, lazy-loads
-`hanja.bin` and `mssymbol.bin`, and uses exact lookup only. Runtime lookup does
-not load the text sources as a fallback. Hangul-to-Hanja, Hanja-to-Hangul
-reverse lookup, and symbol lookup all go through the libhangul table API; the
-adapter should not build a separate reverse index.
+The current Hanja adapter searches committed static C++ tables generated from
+libhangul's bundled `hanja.txt` and `mssymbol.txt`. It keeps the engine-facing
+candidate model free from libhangul Hanja headers and uses exact lookup only.
+Runtime lookup does not load txt or binary cache files, and installed
+ProgramData/DLL-adjacent Hanja data replacement is intentionally unsupported.
+
+Regenerate the committed table after updating libhangul Hanja text data:
+
+```cmd
+tools\generate-static-hanja.cmd
+```
+
+Commit the generated `generated_hanja_data.cpp` together with the source data
+change. Normal builds and runtime lookup do not depend on this generator.

@@ -2,7 +2,6 @@
 
 #if defined(_WIN32)
 
-#include <ShlObj.h>
 #include <imm.h>
 
 #include <cstdint>
@@ -612,54 +611,6 @@ std::string WideToUtf8Text(std::wstring_view text) {
   return utf8_text;
 }
 
-std::filesystem::path ProgramDataHanjaDirectory() {
-  PWSTR program_data_path = nullptr;
-  const HRESULT hr = SHGetKnownFolderPath(FOLDERID_ProgramData, 0, nullptr,
-                                          &program_data_path);
-  if (FAILED(hr) || program_data_path == nullptr) {
-    return {};
-  }
-
-  std::filesystem::path path(program_data_path);
-  CoTaskMemFree(program_data_path);
-  return path / L"MilkyWayIME" / L"data" / L"hanja";
-}
-
-void UseHanjaDictionaryFilesFromDirectory(
-    adapters::dictionary::HanjaDictionaryPaths& paths,
-    const std::filesystem::path& directory) {
-  if (directory.empty()) {
-    return;
-  }
-
-  std::error_code error_code;
-  const std::filesystem::path hanja_binary = directory / L"hanja.bin";
-  const std::filesystem::path symbol_binary = directory / L"mssymbol.bin";
-  if (std::filesystem::is_regular_file(hanja_binary, error_code)) {
-    paths.hanja_binary_path = hanja_binary;
-  }
-  error_code.clear();
-  if (std::filesystem::is_regular_file(symbol_binary, error_code)) {
-    paths.symbol_binary_path = symbol_binary;
-  }
-}
-
-adapters::dictionary::HanjaDictionaryPaths ResolveHanjaDictionaryPaths() {
-  adapters::dictionary::HanjaDictionaryPaths paths =
-      adapters::dictionary::DefaultHanjaDictionaryPaths();
-
-  const std::wstring module_path =
-      registration::ModulePath(ModuleInstance());
-  if (!module_path.empty()) {
-    const std::filesystem::path installed_hanja_dir =
-        std::filesystem::path(module_path).parent_path() / L"data" / L"hanja";
-    UseHanjaDictionaryFilesFromDirectory(paths, installed_hanja_dir);
-  }
-  UseHanjaDictionaryFilesFromDirectory(paths, ProgramDataHanjaDirectory());
-
-  return paths;
-}
-
 std::unique_ptr<adapters::libhangul::HangulComposer>
 CreateComposerForKoreanLayout(
     const engine::layout::LayoutRegistry& layout_registry,
@@ -674,29 +625,12 @@ CreateComposerForKoreanLayout(
       layout->libhangul_keyboard_id);
 }
 
-#if defined(_DEBUG)
-
 std::wstring Utf8ToWide(std::string_view text) {
   std::wstring wide_text = Utf8ToWideText(text);
   if (wide_text.empty() && !text.empty()) {
     return L"<invalid-utf8>";
   }
   return wide_text;
-}
-
-std::wstring GuidToString(REFGUID guid) {
-  wchar_t buffer[39] = {};
-  if (StringFromGUID2(guid, buffer, static_cast<int>(std::size(buffer))) == 0) {
-    return L"<invalid-guid>";
-  }
-
-  return buffer;
-}
-
-std::wstring PointerToString(const void* pointer) {
-  wchar_t buffer[32] = {};
-  swprintf_s(buffer, L"%p", pointer);
-  return buffer;
 }
 
 std::wstring CurrentProcessName() {
@@ -711,6 +645,76 @@ std::wstring CurrentProcessName() {
     return file_name + 1;
   }
 
+  return buffer;
+}
+
+std::wstring WindowClassName(HWND hwnd) {
+  if (hwnd == nullptr) {
+    return L"<none>";
+  }
+
+  wchar_t buffer[128] = {};
+  const int length =
+      GetClassNameW(hwnd, buffer, static_cast<int>(std::size(buffer)));
+  if (length <= 0) {
+    return std::wstring(L"<class-failed:") + FormatHex(GetLastError()) + L">";
+  }
+
+  return std::wstring(buffer, static_cast<std::size_t>(length));
+}
+
+bool IsContextTransitory(ITfContext* context) {
+  if (context == nullptr) {
+    return false;
+  }
+
+  TF_STATUS status = {};
+  return SUCCEEDED(context->GetStatus(&status)) &&
+         (status.dwStaticFlags & TS_SS_TRANSITORY) != 0;
+}
+
+edit::TransitoryCompositionBridgeSnapshot CaptureTransitoryBridgeSnapshot(
+    ITfContext* context, bool internal_composing,
+    bool has_tracked_tsf_composition, std::wstring preedit) {
+  edit::TransitoryCompositionBridgeSnapshot snapshot;
+  snapshot.target.process_name = CurrentProcessName();
+  snapshot.context = context;
+  snapshot.internal_composing = internal_composing;
+  snapshot.has_tracked_tsf_composition = has_tracked_tsf_composition;
+  snapshot.preedit = std::move(preedit);
+  if (context == nullptr) {
+    return snapshot;
+  }
+
+  snapshot.target.is_transitory = IsContextTransitory(context);
+
+  ITfContextView* view = nullptr;
+  if (SUCCEEDED(context->GetActiveView(&view)) && view != nullptr) {
+    HWND hwnd = nullptr;
+    if (SUCCEEDED(view->GetWnd(&hwnd))) {
+      snapshot.view_hwnd = hwnd;
+      snapshot.target.view_class = WindowClassName(hwnd);
+    }
+    view->Release();
+  }
+
+  return snapshot;
+}
+
+#if defined(_DEBUG)
+
+std::wstring GuidToString(REFGUID guid) {
+  wchar_t buffer[39] = {};
+  if (StringFromGUID2(guid, buffer, static_cast<int>(std::size(buffer))) == 0) {
+    return L"<invalid-guid>";
+  }
+
+  return buffer;
+}
+
+std::wstring PointerToString(const void* pointer) {
+  wchar_t buffer[32] = {};
+  swprintf_s(buffer, L"%p", pointer);
   return buffer;
 }
 
@@ -744,20 +748,6 @@ std::wstring ProcessNameFromPid(DWORD process_id) {
   }
 
   return FileNameFromPath(std::wstring_view(buffer, length));
-}
-
-std::wstring WindowClassName(HWND hwnd) {
-  if (hwnd == nullptr) {
-    return L"<none>";
-  }
-
-  wchar_t buffer[128] = {};
-  const int length = GetClassNameW(hwnd, buffer, static_cast<int>(std::size(buffer)));
-  if (length <= 0) {
-    return std::wstring(L"<class-failed:") + FormatHex(GetLastError()) + L">";
-  }
-
-  return std::wstring(buffer, static_cast<std::size_t>(length));
 }
 
 std::wstring ForegroundWindowDiagnostics() {
@@ -823,16 +813,6 @@ std::wstring CompartmentDiagnostics(ITfCompartmentMgr* manager, REFGUID guid,
   VariantClear(&value);
   compartment->Release();
   return diagnostics;
-}
-
-bool IsContextTransitory(ITfContext* context) {
-  if (context == nullptr) {
-    return false;
-  }
-
-  TF_STATUS status = {};
-  return SUCCEEDED(context->GetStatus(&status)) &&
-         (status.dwStaticFlags & TS_SS_TRANSITORY) != 0;
 }
 
 std::wstring ActiveViewDiagnostics(ITfContext* context, HWND* hwnd_out) {
@@ -928,34 +908,6 @@ const wchar_t* TransitoryBridgeTargetKindName(
   }
 
   return L"Unknown";
-}
-
-edit::TransitoryCompositionBridgeSnapshot CaptureTransitoryBridgeSnapshot(
-    ITfContext* context, bool internal_composing,
-    bool has_tracked_tsf_composition, std::wstring preedit) {
-  edit::TransitoryCompositionBridgeSnapshot snapshot;
-  snapshot.target.process_name = CurrentProcessName();
-  snapshot.context = context;
-  snapshot.internal_composing = internal_composing;
-  snapshot.has_tracked_tsf_composition = has_tracked_tsf_composition;
-  snapshot.preedit = std::move(preedit);
-  if (context == nullptr) {
-    return snapshot;
-  }
-
-  snapshot.target.is_transitory = IsContextTransitory(context);
-
-  ITfContextView* view = nullptr;
-  if (SUCCEEDED(context->GetActiveView(&view)) && view != nullptr) {
-    HWND hwnd = nullptr;
-    if (SUCCEEDED(view->GetWnd(&hwnd))) {
-      snapshot.view_hwnd = hwnd;
-      snapshot.target.view_class = WindowClassName(hwnd);
-    }
-    view->Release();
-  }
-
-  return snapshot;
 }
 
 std::wstring TransitoryBridgeSnapshotDiagnostics(
@@ -1502,8 +1454,7 @@ HRESULT TipTextService::CreateInstance(IUnknown* outer, REFIID riid,
 }
 
 TipTextService::TipTextService()
-    : hanja_dictionary_(ResolveHanjaDictionaryPaths()),
-      session_(layout_registry_.DefaultBaseLayout().id,
+    : session_(layout_registry_.DefaultBaseLayout().id,
                layout_registry_.DefaultKoreanLayout().id),
       edit_sink_(this),
       logic_(&session_, adapters::libhangul::CreateLibhangulComposer(),
@@ -1525,7 +1476,6 @@ TipTextService::TipTextService()
     session_.SetLayouts(user_settings.base_layout_id,
                         user_settings.korean_layout_id);
   }
-  hanja_dictionary_.Preload();
   DllAddRef();
 }
 

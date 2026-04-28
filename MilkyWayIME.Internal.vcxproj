@@ -56,6 +56,7 @@
     </ClCompile>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="src\adapters\dictionary\generated_hanja_data.cpp" />
     <ClCompile Include="src\adapters\dictionary\libhangul_hanja_dictionary.cpp" />
     <ClCompile Include="src\adapters\libhangul\libhangul_composer.cpp" />
     <ClCompile Include="src\engine\hanja\candidate_request.cpp" />
@@ -83,6 +84,7 @@
     <ClCompile Include="src\ui\candidate\candidate_window.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="src\adapters\dictionary\generated_hanja_data.h" />
     <ClInclude Include="src\adapters\dictionary\libhangul_hanja_dictionary.h" />
     <ClInclude Include="src\adapters\libhangul\hangul_composer.h" />
     <ClInclude Include="src\engine\composition\composition_snapshot.h" />

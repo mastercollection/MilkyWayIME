@@ -35,7 +35,7 @@ This repository currently contains an early but manually testable TSF path:
 - `src/tsf` for the initial Windows TSF composition lifecycle layer and the
   minimum COM text service runtime
 - `src/adapters/libhangul` for the statically linked `libhangul` integration boundary
-- `src/adapters/dictionary` for libhangul Hanja and symbol dictionary lookup
+- `src/adapters/dictionary` for static Hanja and symbol dictionary lookup
 - `src/ui/candidate` and `src/tsf/candidate` for candidate list presentation
   and TSF UI element integration
 - `data/layouts` for layout schema samples and future custom layout data
@@ -176,9 +176,8 @@ same Release x64 MSI, and uploads it as an artifact. It derives the MSI version
 from a `vX.Y.Z` tag, an optional manual workflow input, or
 `0.1.<GITHUB_RUN_NUMBER>`.
 
-The script builds `Release|x64`, packages `mwime_tsf.dll`, the binary Hanja
-cache files, and the `us_qwerty` / `colemak` base layout JSON samples, then
-produces:
+The script builds `Release|x64`, packages `mwime_tsf.dll` and the `us_qwerty` /
+`colemak` base layout JSON samples, then produces:
 
 ```text
 build\installer\bin\Release\MilkyWayIME.msi
@@ -210,20 +209,21 @@ tools\unregister-msvc-debug.cmd
 
 Run both scripts from an elevated Command Prompt.
 
-The registration script copies `build\MilkyWayIME.Tsf\x64\Debug\mwime_tsf.dll` to
-`%ProgramW6432%\MilkyWayIME\mwime_tsf.dll`, registers that installed copy
-through `regsvr32`, copies required `hanja.bin` and `mssymbol.bin` into
-`%ProgramData%\MilkyWayIME\data\hanja`, and restarts `ctfmon.exe` so the TSF
-profile refreshes. Runtime Hanja lookup prefers the ProgramData binary cache,
-falls back to the legacy DLL-adjacent cache, and finally uses the development
-source tree path in Debug-style runs. Text sources are used to regenerate the
-binary cache during development.
+The registration script copies `build\MilkyWayIME.Tsf\x64\Debug\mwime_tsf.dll`
+to `%ProgramW6432%\MilkyWayIME\mwime_tsf.dll`, registers that installed copy
+through `regsvr32`, and restarts `ctfmon.exe` so the TSF profile refreshes.
+Runtime Hanja and symbol lookup uses static tables compiled into the DLL.
 
-Regenerate the source-tree Hanja binary caches with:
+Regenerate the committed static Hanja and symbol tables with:
 
 ```cmd
-tools\generate-hanja-cache.cmd
+tools\generate-static-hanja.cmd
 ```
+
+The generator reads `external\libhangul\data\hanja\hanja.txt` and
+`external\libhangul\data\hanja\mssymbol.txt`, then updates
+`src\adapters\dictionary\generated_hanja_data.cpp`. Normal builds and runtime
+lookup do not depend on the generator or the txt/bin data files.
 
 The unregister script defaults to `%ProgramW6432%\MilkyWayIME\mwime_tsf.dll`
 and calls the DLL's `DllUnregisterServer` export through `regsvr32`.

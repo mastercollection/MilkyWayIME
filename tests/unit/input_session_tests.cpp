@@ -1,6 +1,5 @@
 #include <cassert>
 #include <algorithm>
-#include <cstdlib>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -25,7 +24,6 @@
 #include "engine/session/input_session.h"
 #include "engine/shortcut/shortcut_resolver.h"
 #include "engine/state/modifier_state.h"
-#include "hangul.h"
 #include "tsf/edit/text_edit_sink.h"
 #include "tsf/edit/text_edit_plan.h"
 #include "tsf/edit/transitory_composition_bridge.h"
@@ -66,14 +64,6 @@ std::string ReadTextFile(const char* path) {
   std::ostringstream buffer;
   buffer << stream.rdbuf();
   return buffer.str();
-}
-
-std::filesystem::path SourceHanjaDirectory() {
-  std::filesystem::path source_file = std::filesystem::path(__FILE__);
-  for (int i = 0; i < 3; ++i) {
-    source_file = source_file.parent_path();
-  }
-  return source_file / "external" / "libhangul" / "data" / "hanja";
 }
 
 void AssertOperation(const TextEditOperation& operation,
@@ -138,36 +128,6 @@ bool ContainsCandidateKey(
                      [key](const milkyway::engine::hanja::Candidate& item) {
                        return item.key == key;
                      });
-}
-
-bool HanjaListContainsValue(HanjaList* list, std::string_view value) {
-  if (list == nullptr) {
-    return false;
-  }
-
-  const int size = hanja_list_get_size(list);
-  for (int index = 0; index < size; ++index) {
-    const char* item =
-        hanja_list_get_nth_value(list, static_cast<unsigned int>(index));
-    if (item != nullptr && std::string_view(item) == value) {
-      return true;
-    }
-  }
-  return false;
-}
-
-void AssertHanjaExactValue(HanjaTable* table, const char* key,
-                           std::string_view value) {
-  HanjaList* list = hanja_table_match_exact(table, key);
-  assert(HanjaListContainsValue(list, value));
-  hanja_list_delete(list);
-}
-
-void AssertHanjaReverseValue(HanjaTable* table, const char* value,
-                             std::string_view key) {
-  HanjaList* list = hanja_table_match_exact_value(table, value);
-  assert(HanjaListContainsValue(list, key));
-  hanja_list_delete(list);
 }
 
 void TestHanjaCandidateRequestValidation() {
@@ -243,60 +203,6 @@ void TestSelectionHanjaPrefixRequests() {
   assert(CreateSelectionHanjaReversePrefixRequests("\xED\x95\x9C").empty());
 }
 
-void TestLibhangulHanjaBinaryCache() {
-  const milkyway::adapters::dictionary::HanjaDictionaryPaths paths =
-      milkyway::adapters::dictionary::DefaultHanjaDictionaryPaths();
-  const std::string hanja_path = (SourceHanjaDirectory() / "hanja.txt").string();
-  std::error_code error_code;
-  const std::filesystem::path binary_path =
-      std::filesystem::temp_directory_path(error_code) /
-      "milkyway-hanja-test-cache-unit.bin";
-  assert(!error_code);
-  std::filesystem::remove(binary_path, error_code);
-  error_code.clear();
-  const std::string binary_path_text = binary_path.string();
-
-  HanjaTable* txt_table = hanja_table_load(hanja_path.c_str());
-  assert(txt_table != nullptr);
-  AssertHanjaExactValue(txt_table, "\xED\x95\x9C", "\xE9\x9F\x93");
-  AssertHanjaExactValue(txt_table, "\xED\x95\x9C\xEA\xB5\xAD",
-                        "\xE9\x9F\x93\xE5\x9C\x8B");
-  AssertHanjaExactValue(txt_table, "\xED\x8F\xAD\xEB\xA0\xAC",
-                        "\xE7\x88\x86\xE8\xA3\x82");
-  AssertHanjaExactValue(txt_table, "\xEC\xB2\x9C\xEC\x82\xAC",
-                        "\xE5\xA4\xA9\xE4\xBD\xBF");
-  AssertHanjaReverseValue(txt_table, "\xE5\xAE\x89\xE5\xAF\xA7",
-                          "\xEC\x95\x88\xEB\x85\x95");
-  AssertHanjaReverseValue(txt_table, "\xE7\x88\x86\xE8\xA3\x82",
-                          "\xED\x8F\xAD\xEB\xA0\xAC");
-  AssertHanjaReverseValue(txt_table, "\xE5\xA4\xA9\xE4\xBD\xBF",
-                          "\xEC\xB2\x9C\xEC\x82\xAC");
-  assert(hanja_table_save_binary(txt_table, binary_path_text.c_str(),
-                                 hanja_path.c_str()));
-
-  HanjaTable* binary_table =
-      hanja_table_load_binary(binary_path_text.c_str(), nullptr);
-  assert(binary_table != nullptr);
-  AssertHanjaExactValue(binary_table, "\xED\x95\x9C", "\xE9\x9F\x93");
-  AssertHanjaExactValue(binary_table, "\xED\x95\x9C\xEA\xB5\xAD",
-                        "\xE9\x9F\x93\xE5\x9C\x8B");
-  AssertHanjaExactValue(binary_table, "\xED\x8F\xAD\xEB\xA0\xAC",
-                        "\xE7\x88\x86\xE8\xA3\x82");
-  AssertHanjaExactValue(binary_table, "\xEC\xB2\x9C\xEC\x82\xAC",
-                        "\xE5\xA4\xA9\xE4\xBD\xBF");
-
-  const std::string symbol_binary_path = paths.symbol_binary_path.string();
-  HanjaTable* symbol_binary_table =
-      hanja_table_load_binary(symbol_binary_path.c_str(), nullptr);
-  assert(symbol_binary_table != nullptr);
-  AssertHanjaExactValue(symbol_binary_table, "\xE3\x85\x81", "\xE2\x80\xBB");
-
-  hanja_table_delete(symbol_binary_table);
-  hanja_table_delete(binary_table);
-  hanja_table_delete(txt_table);
-  std::filesystem::remove(binary_path, error_code);
-}
-
 void TestLibhangulHanjaDictionary() {
   using milkyway::adapters::dictionary::LibhangulHanjaDictionary;
   using milkyway::engine::hanja::CaretHanjaRun;
@@ -319,13 +225,33 @@ void TestLibhangulHanjaDictionary() {
   };
 
   LibhangulHanjaDictionary dictionary;
-  dictionary.Preload();
 
   const auto hanja_candidates =
       dictionary.Lookup(
           CandidateRequest{"\xED\x95\x9C", CandidateKind::kHanjaForward});
   assert(!hanja_candidates.empty());
   assert(ContainsCandidateValue(hanja_candidates, "\xE9\x9F\x93"));
+
+  const auto korea_candidates = dictionary.Lookup(
+      CandidateRequest{"\xED\x95\x9C\xEA\xB5\xAD",
+                       CandidateKind::kHanjaForward});
+  assert(!korea_candidates.empty());
+  assert(ContainsCandidateValue(korea_candidates,
+                                "\xE9\x9F\x93\xE5\x9C\x8B"));
+
+  const auto pokryeol_candidates = dictionary.Lookup(
+      CandidateRequest{"\xED\x8F\xAD\xEB\xA0\xAC",
+                       CandidateKind::kHanjaForward});
+  assert(!pokryeol_candidates.empty());
+  assert(ContainsCandidateValue(pokryeol_candidates,
+                                "\xE7\x88\x86\xE8\xA3\x82"));
+
+  const auto cheonsa_candidates = dictionary.Lookup(
+      CandidateRequest{"\xEC\xB2\x9C\xEC\x82\xAC",
+                       CandidateKind::kHanjaForward});
+  assert(!cheonsa_candidates.empty());
+  assert(ContainsCandidateValue(cheonsa_candidates,
+                                "\xE5\xA4\xA9\xE4\xBD\xBF"));
 
   const auto symbol_candidates = dictionary.Lookup(
       CandidateRequest{"\xE3\x85\x81", CandidateKind::kSymbol});
@@ -1910,7 +1836,6 @@ int main() {
   TestInputSession();
   TestHanjaCandidateRequestValidation();
   TestSelectionHanjaPrefixRequests();
-  TestLibhangulHanjaBinaryCache();
   TestLibhangulHanjaDictionary();
   TestLibhangulComposer();
   TestLibhangulComposerAutoReorder();
