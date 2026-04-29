@@ -1612,10 +1612,12 @@ void TestTransitoryDirectTextCompositionGateAndPlan() {
       L"rider64.exe", L"SunAwtFrame", true};
   const TransitoryDirectTextTarget rider_not_transitory{
       L"rider64.exe", L"SunAwtDialog", false};
-  const TransitoryDirectTextTarget nikke_target{
-      L"NIKKE.exe", L"UnityWndClass", true};
+  const TransitoryDirectTextTarget game_popup{
+      L"game.exe", L"GameWindowClass", true};
   const TransitoryDirectTextTarget perforce_popup{
       L"p4v.exe", L"Qt5152QWindowIcon", true};
+  const TransitoryDirectTextTarget edit_popup{
+      L"Everything.exe", L"Edit", true};
 
   const std::vector<TextEditOperation> commit_only = {
       {TextEditOperationType::kCommitText, "a"}};
@@ -1627,9 +1629,11 @@ void TestTransitoryDirectTextCompositionGateAndPlan() {
                                                   true));
   assert(!ShouldUseTransitoryDirectTextComposition(rider_not_transitory,
                                                    commit_only, true));
-  assert(ShouldUseTransitoryDirectTextComposition(nikke_target, commit_only,
+  assert(ShouldUseTransitoryDirectTextComposition(game_popup, commit_only,
                                                   true));
   assert(ShouldUseTransitoryDirectTextComposition(perforce_popup, commit_only,
+                                                  true));
+  assert(ShouldUseTransitoryDirectTextComposition(edit_popup, commit_only,
                                                   true));
 
   constexpr const char* kPieup = "\xE3\x85\x8D";
@@ -1642,12 +1646,14 @@ void TestTransitoryDirectTextCompositionGateAndPlan() {
       {TextEditOperationType::kStartComposition, kPieup}};
   assert(ShouldUseTransitoryDirectTextComposition(rider_target, start_preedit,
                                                   false));
-  assert(ShouldUseTransitoryDirectTextComposition(nikke_target, start_preedit,
+  assert(ShouldUseTransitoryDirectTextComposition(game_popup, start_preedit,
                                                   false));
   assert(ShouldUseTransitoryDirectTextComposition(perforce_popup,
                                                   start_preedit, false));
   assert(!ShouldUseTransitoryDirectTextComposition(rider_not_transitory,
                                                    start_preedit, false));
+  assert(ShouldUseTransitoryDirectTextComposition(edit_popup, start_preedit,
+                                                  false));
   auto start_plan = BuildTransitoryDirectTextOperationPlan(start_preedit);
   assert(start_plan.commit_text.empty());
   assert(start_plan.preedit_text == kPieup);
@@ -1688,6 +1694,7 @@ void TestTransitoryDirectTextCompositionGateAndPlan() {
       {TextEditOperationType::kEndComposition, {}}};
   assert(ShouldUseTransitoryDirectTextComposition(rider_target, end_only,
                                                   true));
+  assert(ShouldUseTransitoryDirectTextComposition(edit_popup, end_only, true));
   auto end_plan = BuildTransitoryDirectTextOperationPlan(end_only);
   assert(end_plan.commit_text.empty());
   assert(end_plan.preedit_text.empty());
@@ -1709,8 +1716,8 @@ void TestTransitoryCompositionBridgeGateAndState() {
       L"rider64.exe", L"SunAwtFrame", true};
   const TransitoryCompositionBridgeTarget rider_not_transitory{
       L"rider64.exe", L"SunAwtDialog", false};
-  const TransitoryCompositionBridgeTarget nikke_target{
-      L"NIKKE.exe", L"UnityWndClass", true};
+  const TransitoryCompositionBridgeTarget game_popup{
+      L"game.exe", L"GameWindowClass", true};
   const TransitoryCompositionBridgeTarget perforce_popup{
       L"p4v.exe", L"Qt5152QWindowIcon", true};
 
@@ -1720,7 +1727,7 @@ void TestTransitoryCompositionBridgeGateAndState() {
          TransitoryCompositionBridgeTargetKind::kSuppressEngineReset);
   assert(GetTransitoryCompositionBridgeTargetKind(rider_not_transitory) ==
          TransitoryCompositionBridgeTargetKind::kNone);
-  assert(GetTransitoryCompositionBridgeTargetKind(nikke_target) ==
+  assert(GetTransitoryCompositionBridgeTargetKind(game_popup) ==
          TransitoryCompositionBridgeTargetKind::kSuppressEngineReset);
   assert(GetTransitoryCompositionBridgeTargetKind(perforce_popup) ==
          TransitoryCompositionBridgeTargetKind::kSuppressEngineReset);
@@ -1748,16 +1755,16 @@ void TestTransitoryCompositionBridgeGateAndState() {
   not_transitory.target = rider_not_transitory;
   assert(!ShouldSuppressTransitoryCompositionEngineReset(not_transitory));
 
-  TransitoryCompositionBridgeSnapshot nikke_snapshot = snapshot;
-  nikke_snapshot.target = nikke_target;
-  assert(ShouldSuppressTransitoryCompositionEngineReset(nikke_snapshot));
+  TransitoryCompositionBridgeSnapshot game_snapshot = snapshot;
+  game_snapshot.target = game_popup;
+  assert(ShouldSuppressTransitoryCompositionEngineReset(game_snapshot));
 
   TransitoryCompositionBridge bridge;
   assert(!bridge.IsActive());
   assert(bridge.suppressed_termination_count() == 0);
   assert(bridge.ShouldSuppressEngineReset(snapshot));
-  assert(bridge.ShouldSuppressEngineReset(nikke_snapshot));
-  assert(!bridge.ShouldObserveTermination(nikke_snapshot));
+  assert(bridge.ShouldSuppressEngineReset(game_snapshot));
+  assert(!bridge.ShouldObserveTermination(game_snapshot));
 
   bridge.NoteSuppressedEngineReset(
       snapshot, reinterpret_cast<ITfComposition*>(0x9999));

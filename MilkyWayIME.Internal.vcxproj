@@ -67,7 +67,6 @@
     <ClCompile Include="src\engine\shortcut\shortcut_resolver.cpp" />
     <ClCompile Include="src\tsf\display\display_attribute.cpp" />
     <ClCompile Include="src\tsf\edit\composition_edit_session.cpp" />
-    <ClCompile Include="src\tsf\edit\nikke_direct_text_composition.cpp" />
     <ClCompile Include="src\tsf\edit\text_edit_plan.cpp" />
     <ClCompile Include="src\tsf\edit\transitory_composition_bridge.cpp" />
     <ClCompile Include="src\tsf\edit\transitory_direct_text_composition.cpp" />
@@ -103,7 +102,6 @@
     <ClInclude Include="src\tsf\display\display_attribute.h" />
     <ClInclude Include="src\tsf\candidate\candidate_list_ui.h" />
     <ClInclude Include="src\tsf\edit\composition_edit_session.h" />
-    <ClInclude Include="src\tsf\edit\nikke_direct_text_composition.h" />
     <ClInclude Include="src\tsf\edit\text_edit_plan.h" />
     <ClInclude Include="src\tsf\edit\text_edit_sink.h" />
     <ClInclude Include="src\tsf\edit\transitory_composition_bridge.h" />

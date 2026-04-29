@@ -41,6 +41,110 @@ bool KeyPressed(int virtual_key) {
   return (GetKeyState(virtual_key) & 0x8000) != 0;
 }
 
+std::wstring FormatHex(std::uint32_t value);
+std::wstring PointerToString(const void* pointer);
+
+constexpr DWORD kImePropCompleteOnUnselect = 0x00100000;
+
+struct Imm32ImeInfo {
+  DWORD private_data_size = 0;
+  DWORD property = 0;
+  DWORD conversion_caps = 0;
+  DWORD sentence_caps = 0;
+  DWORD ui_caps = 0;
+  DWORD set_composition_string_caps = 0;
+  DWORD select_caps = 0;
+};
+
+struct Imm32ImeDpi {
+  Imm32ImeDpi* next = nullptr;
+  HINSTANCE instance = nullptr;
+  HKL keyboard_layout = nullptr;
+  Imm32ImeInfo ime_info;
+};
+
+using ImmLockImeDpiFn = void* (WINAPI*)(HKL keyboard_layout);
+using ImmUnlockImeDpiFn = void(WINAPI*)(void* ime_dpi);
+
+void* PatchImm32CompleteOnUnselectProperty() {
+  HMODULE imm32 = LoadLibraryW(L"imm32.dll");
+  if (imm32 == nullptr) {
+#if defined(_DEBUG)
+    debug::DebugLog(
+        L"[MilkyWayIME][Imm32Patch][LoadLibraryFailed] error=0x" +
+        FormatHex(GetLastError()));
+#endif
+    return nullptr;
+  }
+
+  const FARPROC proc = GetProcAddress(imm32, "ImmLockImeDpi");
+  if (proc == nullptr) {
+#if defined(_DEBUG)
+    debug::DebugLog(
+        L"[MilkyWayIME][Imm32Patch][ImmLockImeDpiMissing] error=0x" +
+        FormatHex(GetLastError()));
+#endif
+    return nullptr;
+  }
+
+  const auto lock_ime_dpi = reinterpret_cast<ImmLockImeDpiFn>(proc);
+  void* ime_dpi_pointer = lock_ime_dpi(GetKeyboardLayout(0));
+  auto* ime_dpi = static_cast<Imm32ImeDpi*>(ime_dpi_pointer);
+  if (ime_dpi == nullptr) {
+#if defined(_DEBUG)
+    debug::DebugLog(L"[MilkyWayIME][Imm32Patch][NoImeDpi]");
+#endif
+    return nullptr;
+  }
+
+  const DWORD previous_property = ime_dpi->ime_info.property;
+  ime_dpi->ime_info.property |= kImePropCompleteOnUnselect;
+#if defined(_DEBUG)
+  debug::DebugLog(
+      L"[MilkyWayIME][Imm32Patch][CompleteOnUnselect] ime_dpi=" +
+      PointerToString(ime_dpi_pointer) + L" previous_property=0x" +
+      FormatHex(previous_property) + L" next_property=0x" +
+      FormatHex(ime_dpi->ime_info.property));
+#endif
+  return ime_dpi_pointer;
+}
+
+void ReleaseImm32ImeDpi(void*& ime_dpi) {
+  if (ime_dpi == nullptr) {
+    return;
+  }
+
+  HMODULE imm32 = LoadLibraryW(L"imm32.dll");
+  if (imm32 == nullptr) {
+#if defined(_DEBUG)
+    debug::DebugLog(
+        L"[MilkyWayIME][Imm32Patch][ReleaseLoadLibraryFailed] ime_dpi=" +
+        PointerToString(ime_dpi) + L" error=0x" + FormatHex(GetLastError()));
+#endif
+    ime_dpi = nullptr;
+    return;
+  }
+
+  const FARPROC proc = GetProcAddress(imm32, "ImmUnlockImeDpi");
+  if (proc == nullptr) {
+#if defined(_DEBUG)
+    debug::DebugLog(
+        L"[MilkyWayIME][Imm32Patch][ImmUnlockImeDpiMissing] ime_dpi=" +
+        PointerToString(ime_dpi) + L" error=0x" + FormatHex(GetLastError()));
+#endif
+    ime_dpi = nullptr;
+    return;
+  }
+
+  const auto unlock_ime_dpi = reinterpret_cast<ImmUnlockImeDpiFn>(proc);
+  unlock_ime_dpi(ime_dpi);
+#if defined(_DEBUG)
+  debug::DebugLog(L"[MilkyWayIME][Imm32Patch][Released] ime_dpi=" +
+                  PointerToString(ime_dpi));
+#endif
+  ime_dpi = nullptr;
+}
+
 bool IsUsableScreenRect(const RECT& rect) {
   if (rect.left == 0 && rect.top == 0 && rect.right == 0 &&
       rect.bottom == 0) {
@@ -1570,6 +1674,7 @@ STDMETHODIMP TipTextService::ActivateEx(ITfThreadMgr* thread_mgr,
   thread_mgr_->AddRef();
   client_id_ = client_id;
   activate_flags_ = flags;
+  imm32_ime_dpi_ = PatchImm32CompleteOnUnselectProperty();
   ime_open_ = true;
 
   HRESULT hr = AdviseThreadMgrEventSink();
@@ -1686,7 +1791,6 @@ STDMETHODIMP TipTextService::Deactivate() {
   }
 
   ResetTransitoryDirectTextComposition(L"Deactivate");
-  ResetNikkeDirectTextComposition(L"Deactivate");
   ResetTransitoryCompositionBridge(L"Deactivate");
   ClearPendingKeyResult();
   edit_sink_.ClearPendingOperations();
@@ -1699,6 +1803,7 @@ STDMETHODIMP TipTextService::Deactivate() {
   UnadviseThreadFocusSink();
   UnadviseThreadMgrEventSink();
   ClearCompositionTracking();
+  ReleaseImm32ImeDpi(imm32_ime_dpi_);
   SafeRelease(thread_mgr_);
 
   client_id_ = TF_CLIENTID_NULL;
@@ -1741,7 +1846,6 @@ STDMETHODIMP TipTextService::OnSetFocus(ITfDocumentMgr* focused,
                            L"OnSetFocus(DocumentMgr)");
   }
   ResetTransitoryDirectTextComposition(L"OnSetFocus(DocumentMgr)");
-  ResetNikkeDirectTextComposition(L"OnSetFocus(DocumentMgr)");
   ResetTransitoryCompositionBridge(L"OnSetFocus(DocumentMgr)");
 
   const HRESULT refresh_hr = RefreshFocusedContext(focused);
@@ -2216,7 +2320,6 @@ STDMETHODIMP TipTextService::OnKillThreadFocus() {
                            L"OnKillThreadFocus");
   }
   ResetTransitoryDirectTextComposition(L"OnKillThreadFocus");
-  ResetNikkeDirectTextComposition(L"OnKillThreadFocus");
   ResetTransitoryCompositionBridge(L"OnKillThreadFocus");
   return S_OK;
 }
@@ -2418,22 +2521,6 @@ HRESULT TipTextService::ApplyTransitoryDirectTextComposition(
 void TipTextService::ResetTransitoryDirectTextComposition(
     const wchar_t* reason) {
   transitory_direct_text_.Reset(reason);
-}
-
-bool TipTextService::ShouldUseNikkeDirectTextComposition(
-    ITfContext* context,
-    const std::vector<edit::TextEditOperation>& operations) const {
-  return nikke_direct_text_.ShouldUse(context, operations);
-}
-
-HRESULT TipTextService::ApplyNikkeDirectTextComposition(
-    TfEditCookie edit_cookie, ITfContext* context,
-    const std::vector<edit::TextEditOperation>& operations) {
-  return nikke_direct_text_.Apply(edit_cookie, context, operations);
-}
-
-void TipTextService::ResetNikkeDirectTextComposition(const wchar_t* reason) {
-  nikke_direct_text_.Reset(reason);
 }
 
 void TipTextService::ResetTransitoryCompositionBridge(const wchar_t* reason) {
@@ -3071,7 +3158,6 @@ HRESULT TipTextService::AttachTextEditSink(ITfContext* context) {
 
 void TipTextService::DetachTextEditSink() {
   ResetTransitoryDirectTextComposition(L"DetachTextEditSink");
-  ResetNikkeDirectTextComposition(L"DetachTextEditSink");
   ResetTransitoryCompositionBridge(L"DetachTextEditSink");
   ITfContext* previous_context = text_edit_sink_context_;
   const DWORD previous_cookie = text_edit_sink_cookie_;
@@ -3153,7 +3239,6 @@ HRESULT TipTextService::FlushPendingOperations(ITfContext* context,
                     FormatHex(static_cast<std::uint32_t>(hr)));
 #endif
     ResetTransitoryDirectTextComposition(L"FlushPendingOperationsFailed");
-    ResetNikkeDirectTextComposition(L"FlushPendingOperationsFailed");
     ResetTransitoryCompositionBridge(L"FlushPendingOperationsFailed");
     edit_sink_.ClearPendingOperations();
   }
@@ -4313,7 +4398,6 @@ void TipTextService::SyncCompositionTermination() {
   edit_sink_.ClearPendingOperations();
   ClearCompositionTracking();
   ResetTransitoryDirectTextComposition(L"SyncCompositionTermination");
-  ResetNikkeDirectTextComposition(L"SyncCompositionTermination");
   ResetTransitoryCompositionBridge(L"SyncCompositionTermination");
   logic_.OnCompositionTerminated();
 #if defined(_DEBUG)

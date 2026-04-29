@@ -144,6 +144,10 @@ HRESULT MoveSelectionToRangeEnd(TfEditCookie edit_cookie, ITfContext* context,
 std::wstring DebugTextSnippet(std::wstring_view text);
 #endif
 
+bool IsWin32EditTarget(const TransitoryDirectTextTarget& target) {
+  return target.view_class == L"Edit";
+}
+
 HRESULT SendBackspaceToWindow(HWND hwnd, std::size_t count) {
   if (hwnd == nullptr || count == 0) {
     return count == 0 ? S_OK : E_INVALIDARG;
@@ -209,6 +213,185 @@ HRESULT SendBackspaceToWindow(HWND hwnd, std::size_t count) {
   debug::DebugLog(
       L"[MilkyWayIME][TransitoryDirectText][HostDeleteEnd] hwnd=" +
       PointerToString(hwnd) + L" count=" + std::to_wstring(count));
+#endif
+  return S_OK;
+}
+
+bool ReadWindowText(HWND hwnd, std::wstring* text) {
+  if (hwnd == nullptr || text == nullptr) {
+    return false;
+  }
+
+  constexpr UINT kTimeoutMs = 100;
+  DWORD_PTR length_result = 0;
+  SetLastError(ERROR_SUCCESS);
+  if (SendMessageTimeoutW(hwnd, WM_GETTEXTLENGTH, 0, 0,
+                          SMTO_ABORTIFHUNG | SMTO_BLOCK, kTimeoutMs,
+                          &length_result) == 0) {
+#if defined(_DEBUG)
+    debug::DebugLog(
+        L"[MilkyWayIME][TransitoryDirectText][Win32EditReplace]"
+        L"[GetTextLengthFailed] hwnd=" +
+        PointerToString(hwnd) + L" error=0x" + FormatHex(GetLastError()));
+#endif
+    return false;
+  }
+
+  const std::size_t length = static_cast<std::size_t>(length_result);
+  std::wstring buffer(length + 1, L'\0');
+  DWORD_PTR copied_result = 0;
+  SetLastError(ERROR_SUCCESS);
+  if (SendMessageTimeoutW(hwnd, WM_GETTEXT, static_cast<WPARAM>(buffer.size()),
+                          reinterpret_cast<LPARAM>(buffer.data()),
+                          SMTO_ABORTIFHUNG | SMTO_BLOCK, kTimeoutMs,
+                          &copied_result) == 0) {
+#if defined(_DEBUG)
+    debug::DebugLog(
+        L"[MilkyWayIME][TransitoryDirectText][Win32EditReplace]"
+        L"[GetTextFailed] hwnd=" +
+        PointerToString(hwnd) + L" error=0x" + FormatHex(GetLastError()));
+#endif
+    return false;
+  }
+
+  buffer.resize(static_cast<std::size_t>(copied_result));
+  *text = std::move(buffer);
+  return true;
+}
+
+bool QueryEditSelection(HWND hwnd, DWORD* start, DWORD* end) {
+  if (hwnd == nullptr || start == nullptr || end == nullptr) {
+    return false;
+  }
+
+  constexpr UINT kTimeoutMs = 100;
+  DWORD_PTR result = 0;
+  SetLastError(ERROR_SUCCESS);
+  if (SendMessageTimeoutW(hwnd, EM_GETSEL, reinterpret_cast<WPARAM>(start),
+                          reinterpret_cast<LPARAM>(end),
+                          SMTO_ABORTIFHUNG | SMTO_BLOCK, kTimeoutMs,
+                          &result) == 0) {
+#if defined(_DEBUG)
+    debug::DebugLog(
+        L"[MilkyWayIME][TransitoryDirectText][Win32EditReplace]"
+        L"[GetSelFailed] hwnd=" +
+        PointerToString(hwnd) + L" error=0x" + FormatHex(GetLastError()));
+#endif
+    return false;
+  }
+  return true;
+}
+
+bool SendEditMessage(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam,
+                     DWORD_PTR* result_out = nullptr) {
+  constexpr UINT kTimeoutMs = 100;
+  DWORD_PTR result = 0;
+  SetLastError(ERROR_SUCCESS);
+  if (SendMessageTimeoutW(hwnd, message, wparam, lparam,
+                          SMTO_ABORTIFHUNG | SMTO_BLOCK, kTimeoutMs,
+                          &result) == 0) {
+#if defined(_DEBUG)
+    debug::DebugLog(
+        L"[MilkyWayIME][TransitoryDirectText][Win32EditReplace]"
+        L"[SendMessageFailed] hwnd=" +
+        PointerToString(hwnd) + L" message=0x" + FormatHex(message) +
+        L" error=0x" + FormatHex(GetLastError()));
+#endif
+    return false;
+  }
+  if (result_out != nullptr) {
+    *result_out = result;
+  }
+  return true;
+}
+
+HRESULT ReplacePreviousPreeditByWin32Edit(
+    HWND hwnd, const std::wstring& previous_preedit,
+    const std::wstring& replacement_text) {
+  if (hwnd == nullptr || previous_preedit.empty()) {
+#if defined(_DEBUG)
+    debug::DebugLog(
+        L"[MilkyWayIME][TransitoryDirectText][Win32EditReplace][Skip] hwnd=" +
+        PointerToString(hwnd) + L" previous_len=" +
+        std::to_wstring(previous_preedit.size()));
+#endif
+    return S_FALSE;
+  }
+
+  std::wstring before_text;
+  DWORD before_start = 0;
+  DWORD before_end = 0;
+  if (!ReadWindowText(hwnd, &before_text) ||
+      !QueryEditSelection(hwnd, &before_start, &before_end)) {
+    return S_FALSE;
+  }
+
+  const std::size_t previous_len = previous_preedit.size();
+  if (before_start != before_end || before_start > before_text.size() ||
+      before_start < previous_len ||
+      before_text.compare(static_cast<std::size_t>(before_start) - previous_len,
+                          previous_len, previous_preedit) != 0) {
+#if defined(_DEBUG)
+    debug::DebugLog(
+        L"[MilkyWayIME][TransitoryDirectText][Win32EditReplace]"
+        L"[BeforeMismatch] hwnd=" +
+        PointerToString(hwnd) + L" sel_start=" +
+        std::to_wstring(before_start) + L" sel_end=" +
+        std::to_wstring(before_end) + L" text_len=" +
+        std::to_wstring(before_text.size()) + L" previous=\"" +
+        DebugTextSnippet(previous_preedit) + L"\" before=\"" +
+        DebugTextSnippet(before_text) + L"\"");
+#endif
+    return S_FALSE;
+  }
+
+  const DWORD replace_start =
+      before_start - static_cast<DWORD>(previous_len);
+  if (!SendEditMessage(hwnd, EM_SETSEL, replace_start, before_end)) {
+    return S_FALSE;
+  }
+  if (!SendEditMessage(hwnd, EM_REPLACESEL, TRUE,
+                       reinterpret_cast<LPARAM>(replacement_text.c_str()))) {
+    return S_FALSE;
+  }
+
+  std::wstring after_text;
+  DWORD after_start = 0;
+  DWORD after_end = 0;
+  if (!ReadWindowText(hwnd, &after_text) ||
+      !QueryEditSelection(hwnd, &after_start, &after_end)) {
+    return S_FALSE;
+  }
+
+  std::wstring expected_text = before_text;
+  expected_text.replace(static_cast<std::size_t>(replace_start), previous_len,
+                        replacement_text);
+  const DWORD expected_caret =
+      replace_start + static_cast<DWORD>(replacement_text.size());
+  if (after_text != expected_text || after_start != expected_caret ||
+      after_end != expected_caret) {
+#if defined(_DEBUG)
+    debug::DebugLog(
+        L"[MilkyWayIME][TransitoryDirectText][Win32EditReplace]"
+        L"[AfterMismatch] hwnd=" +
+        PointerToString(hwnd) + L" expected_caret=" +
+        std::to_wstring(expected_caret) + L" after_start=" +
+        std::to_wstring(after_start) + L" after_end=" +
+        std::to_wstring(after_end) + L" expected=\"" +
+        DebugTextSnippet(expected_text) + L"\" after=\"" +
+        DebugTextSnippet(after_text) + L"\"");
+#endif
+    return S_FALSE;
+  }
+
+#if defined(_DEBUG)
+  debug::DebugLog(
+      L"[MilkyWayIME][TransitoryDirectText][Win32EditReplace][End] hwnd=" +
+      PointerToString(hwnd) + L" replace_start=" +
+      std::to_wstring(replace_start) + L" previous=\"" +
+      DebugTextSnippet(previous_preedit) + L"\" replacement=\"" +
+      DebugTextSnippet(replacement_text) + L"\" text=\"" +
+      DebugTextSnippet(after_text) + L"\"");
 #endif
   return S_OK;
 }
@@ -285,6 +468,37 @@ HRESULT InsertTextAtSelection(TfEditCookie edit_cookie, ITfContext* context,
     inserted_range = nullptr;
   }
   SafeRelease(inserted_range);
+  return hr;
+}
+
+HRESULT ReplacePreviousPreeditByWin32EditFallback(
+    TfEditCookie edit_cookie, ITfContext* context, HWND hwnd,
+    const std::wstring& previous_preedit,
+    const std::wstring& replacement_text) {
+  (void)edit_cookie;
+  if (context == nullptr || hwnd == nullptr || previous_preedit.empty()) {
+#if defined(_DEBUG)
+    debug::DebugLog(
+      L"[MilkyWayIME][TransitoryDirectText][Win32EditFallback][Skip] context=" +
+        PointerToString(context) + L" hwnd=" + PointerToString(hwnd) +
+        L" previous_len=" + std::to_wstring(previous_preedit.size()));
+#endif
+    return S_FALSE;
+  }
+
+  HRESULT hr =
+      ReplacePreviousPreeditByWin32Edit(hwnd, previous_preedit, replacement_text);
+  if (hr == S_FALSE) {
+    return S_FALSE;
+  }
+#if defined(_DEBUG)
+  debug::DebugLog(
+      L"[MilkyWayIME][TransitoryDirectText][Win32EditFallback][End] hr=0x" +
+      FormatHex(static_cast<std::uint32_t>(hr)) + L" hwnd=" +
+      PointerToString(hwnd) + L" previous=\"" +
+      DebugTextSnippet(previous_preedit) + L"\" replacement=\"" +
+      DebugTextSnippet(replacement_text) + L"\"");
+#endif
   return hr;
 }
 
@@ -520,23 +734,8 @@ bool TransitoryDirectTextComposition::ShouldUse(
 ITfContext* TransitoryDirectTextComposition::ResolveFullContextFromTransitory(
     ITfContext* context,
     const std::vector<TextEditOperation>& operations) const {
-  if (context == nullptr) {
-    return nullptr;
-  }
-
-  const ContextTargetSnapshot snapshot = CaptureTargetSnapshot(context);
-#if defined(_DEBUG)
-  if (ShouldUseTransitoryDirectTextComposition(snapshot.target, operations,
-                                               active_)) {
-    debug::DebugLog(
-        L"[MilkyWayIME][TransitoryDirectText][ResolveFullContextFromTransitory]"
-        L"[DisabledForGenericDirectPath] context=" +
-        PointerToString(context) + L" process=" +
-        snapshot.target.process_name + L" view_class=" +
-        snapshot.target.view_class + L" view_hwnd=" +
-        PointerToString(snapshot.view_hwnd));
-  }
-#endif
+  (void)context;
+  (void)operations;
   return nullptr;
 }
 
@@ -592,7 +791,16 @@ HRESULT TransitoryDirectTextComposition::Apply(
       wrote_text = true;
     }
 
-    if (hr == S_FALSE) {
+    if (hr == S_FALSE && IsWin32EditTarget(snapshot.target)) {
+      hr = ReplacePreviousPreeditByWin32EditFallback(
+          edit_cookie, context, snapshot.view_hwnd, last_preedit_,
+          replacement_text);
+      if (SUCCEEDED(hr) && hr != S_FALSE) {
+        wrote_text = true;
+      }
+    }
+
+    if (hr == S_FALSE && !IsWin32EditTarget(snapshot.target)) {
       hr = ReplacePreviousPreeditByHostBackspace(
           edit_cookie, context, snapshot.view_hwnd, last_preedit_,
           replacement_text);

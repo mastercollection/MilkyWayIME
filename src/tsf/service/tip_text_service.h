@@ -24,7 +24,6 @@
 #include "engine/shortcut/shortcut_resolver.h"
 #include "engine/state/modifier_state.h"
 #include "tsf/display/display_attribute.h"
-#include "tsf/edit/nikke_direct_text_composition.h"
 #include "tsf/edit/transitory_composition_bridge.h"
 #include "tsf/edit/transitory_direct_text_composition.h"
 #include "tsf/edit/tsf_text_edit_sink.h"
@@ -156,13 +155,6 @@ class TipTextService final : public ITfTextInputProcessorEx,
       TfEditCookie edit_cookie, ITfContext* context,
       const std::vector<edit::TextEditOperation>& operations);
   void ResetTransitoryDirectTextComposition(const wchar_t* reason);
-  bool ShouldUseNikkeDirectTextComposition(
-      ITfContext* context,
-      const std::vector<edit::TextEditOperation>& operations) const;
-  HRESULT ApplyNikkeDirectTextComposition(
-      TfEditCookie edit_cookie, ITfContext* context,
-      const std::vector<edit::TextEditOperation>& operations);
-  void ResetNikkeDirectTextComposition(const wchar_t* reason);
 
  private:
   HRESULT AdviseThreadMgrEventSink();
@@ -275,6 +267,7 @@ class TipTextService final : public ITfTextInputProcessorEx,
   ITfContext* text_edit_sink_context_ = nullptr;
   ITfComposition* composition_ = nullptr;
   ITfContext* composition_context_ = nullptr;
+  void* imm32_ime_dpi_ = nullptr;
   bool ime_open_ = true;
   bool deactivating_ = false;
   bool preserved_keys_registered_ = false;
@@ -285,7 +278,6 @@ class TipTextService final : public ITfTextInputProcessorEx,
   engine::session::InputSession session_;
   edit::TransitoryCompositionBridge transitory_composition_bridge_;
   edit::TransitoryDirectTextComposition transitory_direct_text_;
-  edit::NikkeDirectTextComposition nikke_direct_text_;
   edit::TsfTextEditSink edit_sink_;
   TextService logic_;
   candidate::CandidateListUi* candidate_list_ = nullptr;
