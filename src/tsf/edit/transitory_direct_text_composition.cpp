@@ -6,9 +6,13 @@
 #include <cstdint>
 #include <filesystem>
 #include <iterator>
+#include <limits>
 #include <new>
+#include <oleauto.h>
+#include <richedit.h>
 #include <sstream>
 #include <string_view>
+#include <tom.h>
 #include <utility>
 
 #if defined(_DEBUG)
@@ -144,8 +148,53 @@ HRESULT MoveSelectionToRangeEnd(TfEditCookie edit_cookie, ITfContext* context,
 std::wstring DebugTextSnippet(std::wstring_view text);
 #endif
 
-bool IsWin32EditTarget(const TransitoryDirectTextTarget& target) {
-  return target.view_class == L"Edit";
+HRESULT QuerySelectionNotEmpty(TfEditCookie edit_cookie, ITfContext* context,
+                               bool* selection_not_empty_out) {
+  if (selection_not_empty_out != nullptr) {
+    *selection_not_empty_out = false;
+  }
+  if (context == nullptr || selection_not_empty_out == nullptr) {
+    return E_INVALIDARG;
+  }
+
+  TF_SELECTION selection = {};
+  ULONG fetched = 0;
+  HRESULT hr = context->GetSelection(edit_cookie, 0, 1, &selection, &fetched);
+  if (FAILED(hr)) {
+#if defined(_DEBUG)
+    debug::DebugLog(
+        L"[MilkyWayIME][TransitoryDirectText][SelectionProbe]"
+        L"[GetSelectionFailed] hr=0x" +
+        FormatHex(static_cast<std::uint32_t>(hr)));
+#endif
+    return hr;
+  }
+  if (fetched == 0 || selection.range == nullptr) {
+#if defined(_DEBUG)
+    debug::DebugLog(
+        L"[MilkyWayIME][TransitoryDirectText][SelectionProbe]"
+        L"[NoSelection] fetched=" +
+        std::to_wstring(fetched) + L" range=" +
+        PointerToString(selection.range));
+#endif
+    return S_FALSE;
+  }
+
+  BOOL is_empty = TRUE;
+  hr = selection.range->IsEmpty(edit_cookie, &is_empty);
+  selection.range->Release();
+  if (FAILED(hr)) {
+#if defined(_DEBUG)
+    debug::DebugLog(
+        L"[MilkyWayIME][TransitoryDirectText][SelectionProbe]"
+        L"[IsEmptyFailed] hr=0x" +
+        FormatHex(static_cast<std::uint32_t>(hr)));
+#endif
+    return hr;
+  }
+
+  *selection_not_empty_out = !is_empty;
+  return S_OK;
 }
 
 HRESULT SendBackspaceToWindow(HWND hwnd, std::size_t count) {
@@ -396,6 +445,391 @@ HRESULT ReplacePreviousPreeditByWin32Edit(
   return S_OK;
 }
 
+HRESULT QueryRichEditTextDocument(HWND hwnd, ITextDocument** document_out) {
+  if (document_out != nullptr) {
+    *document_out = nullptr;
+  }
+  if (hwnd == nullptr || document_out == nullptr) {
+    return E_INVALIDARG;
+  }
+
+  IUnknown* rich_edit_object = nullptr;
+  DWORD_PTR result = 0;
+  if (!SendEditMessage(hwnd, EM_GETOLEINTERFACE, 0,
+                       reinterpret_cast<LPARAM>(&rich_edit_object), &result) ||
+      result == 0 || rich_edit_object == nullptr) {
+#if defined(_DEBUG)
+    debug::DebugLog(
+        L"[MilkyWayIME][TransitoryDirectText][RichEditRangeReplace]"
+        L"[GetOleInterfaceUnavailable] hwnd=" +
+        PointerToString(hwnd) + L" result=" + std::to_wstring(result) +
+        L" object=" + PointerToString(rich_edit_object));
+#endif
+    SafeRelease(rich_edit_object);
+    return S_FALSE;
+  }
+
+  const HRESULT hr = rich_edit_object->QueryInterface(
+      IID_PPV_ARGS(document_out));
+  rich_edit_object->Release();
+  if (FAILED(hr)) {
+#if defined(_DEBUG)
+    debug::DebugLog(
+        L"[MilkyWayIME][TransitoryDirectText][RichEditRangeReplace]"
+        L"[QueryTextDocumentFailed] hr=0x" +
+        FormatHex(static_cast<std::uint32_t>(hr)));
+#endif
+    return hr == E_NOINTERFACE ? S_FALSE : hr;
+  }
+
+  return S_OK;
+}
+
+HRESULT ReadTomRangeText(ITextRange* range, std::wstring* text_out) {
+  if (text_out != nullptr) {
+    text_out->clear();
+  }
+  if (range == nullptr || text_out == nullptr) {
+    return E_INVALIDARG;
+  }
+
+  BSTR text = nullptr;
+  const HRESULT hr = range->GetText(&text);
+  if (FAILED(hr)) {
+    return hr;
+  }
+
+  if (text != nullptr) {
+    text_out->assign(text, text + SysStringLen(text));
+    SysFreeString(text);
+  }
+  return S_OK;
+}
+
+HRESULT SetTomRangeText(ITextRange* range, const std::wstring& text) {
+  if (range == nullptr) {
+    return E_INVALIDARG;
+  }
+
+  BSTR replacement = SysAllocStringLen(
+      text.empty() ? L"" : text.data(), static_cast<UINT>(text.size()));
+  if (replacement == nullptr && !text.empty()) {
+    return E_OUTOFMEMORY;
+  }
+
+  const HRESULT hr = range->SetText(replacement);
+  SysFreeString(replacement);
+  return hr;
+}
+
+HRESULT ReplacePreviousPreeditByRichEditControlSelection(
+    HWND hwnd, const std::wstring& previous_preedit,
+    const std::wstring& replacement_text) {
+  if (hwnd == nullptr || previous_preedit.empty()) {
+#if defined(_DEBUG)
+    debug::DebugLog(
+        L"[MilkyWayIME][TransitoryDirectText][RichEditControlReplace][Skip] "
+        L"hwnd=" +
+        PointerToString(hwnd) + L" previous_len=" +
+        std::to_wstring(previous_preedit.size()));
+#endif
+    return S_FALSE;
+  }
+
+  std::wstring before_text;
+  DWORD before_start = 0;
+  DWORD before_end = 0;
+  if (!ReadWindowText(hwnd, &before_text) ||
+      !QueryEditSelection(hwnd, &before_start, &before_end)) {
+    return S_FALSE;
+  }
+
+  const std::size_t previous_len = previous_preedit.size();
+  if (before_start != before_end || before_start > before_text.size() ||
+      before_start < previous_len ||
+      before_text.compare(static_cast<std::size_t>(before_start) - previous_len,
+                          previous_len, previous_preedit) != 0) {
+#if defined(_DEBUG)
+    debug::DebugLog(
+        L"[MilkyWayIME][TransitoryDirectText][RichEditControlReplace]"
+        L"[BeforeMismatch] hwnd=" +
+        PointerToString(hwnd) + L" sel_start=" +
+        std::to_wstring(before_start) + L" sel_end=" +
+        std::to_wstring(before_end) + L" text_len=" +
+        std::to_wstring(before_text.size()) + L" previous=\"" +
+        DebugTextSnippet(previous_preedit) + L"\" before=\"" +
+        DebugTextSnippet(before_text) + L"\"");
+#endif
+    return S_FALSE;
+  }
+
+  const DWORD replace_start =
+      before_start - static_cast<DWORD>(previous_len);
+  if (replace_start >
+          static_cast<DWORD>(std::numeric_limits<long>::max()) ||
+      before_start > static_cast<DWORD>(std::numeric_limits<long>::max())) {
+    return S_FALSE;
+  }
+
+  CHARRANGE replace_range = {};
+  replace_range.cpMin = static_cast<LONG>(replace_start);
+  replace_range.cpMax = static_cast<LONG>(before_start);
+  const bool selection_hidden =
+      SendEditMessage(hwnd, EM_HIDESELECTION, TRUE, 0);
+  if (!SendEditMessage(hwnd, EM_EXSETSEL, 0,
+                       reinterpret_cast<LPARAM>(&replace_range))) {
+    if (selection_hidden) {
+      SendEditMessage(hwnd, EM_HIDESELECTION, FALSE, 0);
+    }
+    return S_FALSE;
+  }
+  if (!SendEditMessage(hwnd, EM_REPLACESEL, TRUE,
+                       reinterpret_cast<LPARAM>(replacement_text.c_str()))) {
+    if (selection_hidden) {
+      SendEditMessage(hwnd, EM_HIDESELECTION, FALSE, 0);
+    }
+    return S_FALSE;
+  }
+
+  std::wstring expected_text = before_text;
+  expected_text.replace(static_cast<std::size_t>(replace_start), previous_len,
+                        replacement_text);
+  const DWORD expected_caret =
+      replace_start + static_cast<DWORD>(replacement_text.size());
+  SendEditMessage(hwnd, EM_SETSEL, expected_caret, expected_caret);
+  SendEditMessage(hwnd, EM_SCROLLCARET, 0, 0);
+  if (selection_hidden) {
+    SendEditMessage(hwnd, EM_HIDESELECTION, FALSE, 0);
+  }
+
+  std::wstring after_text;
+  DWORD after_start = 0;
+  DWORD after_end = 0;
+  if (!ReadWindowText(hwnd, &after_text) ||
+      !QueryEditSelection(hwnd, &after_start, &after_end)) {
+    return S_OK;
+  }
+
+#if defined(_DEBUG)
+  if (after_text != expected_text || after_start != expected_caret ||
+      after_end != expected_caret) {
+    debug::DebugLog(
+        L"[MilkyWayIME][TransitoryDirectText][RichEditControlReplace]"
+        L"[AfterMismatch] hwnd=" +
+        PointerToString(hwnd) + L" expected_caret=" +
+        std::to_wstring(expected_caret) + L" after_start=" +
+        std::to_wstring(after_start) + L" after_end=" +
+        std::to_wstring(after_end) + L" expected=\"" +
+        DebugTextSnippet(expected_text) + L"\" after=\"" +
+        DebugTextSnippet(after_text) + L"\"");
+  }
+  debug::DebugLog(
+      L"[MilkyWayIME][TransitoryDirectText][RichEditControlReplace][End] hwnd=" +
+      PointerToString(hwnd) + L" replace_start=" +
+      std::to_wstring(replace_start) + L" caret=" +
+      std::to_wstring(after_start) + L"," + std::to_wstring(after_end) +
+      L" previous=\"" +
+      DebugTextSnippet(previous_preedit) + L"\" replacement=\"" +
+      DebugTextSnippet(replacement_text) + L"\" text=\"" +
+      DebugTextSnippet(after_text) + L"\"");
+#endif
+  return S_OK;
+}
+
+HRESULT ReplacePreviousPreeditByRichEditTomRange(
+    HWND hwnd, const std::wstring& previous_preedit,
+    const std::wstring& replacement_text) {
+  if (hwnd == nullptr || previous_preedit.empty()) {
+#if defined(_DEBUG)
+    debug::DebugLog(
+        L"[MilkyWayIME][TransitoryDirectText][RichEditTomReplace][Skip] "
+        L"hwnd=" +
+        PointerToString(hwnd) + L" previous_len=" +
+        std::to_wstring(previous_preedit.size()));
+#endif
+    return S_FALSE;
+  }
+
+  std::wstring before_text;
+  DWORD before_start = 0;
+  DWORD before_end = 0;
+  if (!ReadWindowText(hwnd, &before_text) ||
+      !QueryEditSelection(hwnd, &before_start, &before_end)) {
+    return S_FALSE;
+  }
+
+  const std::size_t previous_len = previous_preedit.size();
+  if (before_start != before_end || before_start > before_text.size() ||
+      before_start < previous_len ||
+      before_text.compare(static_cast<std::size_t>(before_start) - previous_len,
+                          previous_len, previous_preedit) != 0) {
+#if defined(_DEBUG)
+    debug::DebugLog(
+        L"[MilkyWayIME][TransitoryDirectText][RichEditTomReplace]"
+        L"[BeforeMismatch] hwnd=" +
+        PointerToString(hwnd) + L" sel_start=" +
+        std::to_wstring(before_start) + L" sel_end=" +
+        std::to_wstring(before_end) + L" text_len=" +
+        std::to_wstring(before_text.size()) + L" previous=\"" +
+        DebugTextSnippet(previous_preedit) + L"\" before=\"" +
+        DebugTextSnippet(before_text) + L"\"");
+#endif
+    return S_FALSE;
+  }
+
+  const DWORD replace_start =
+      before_start - static_cast<DWORD>(previous_len);
+  if (replace_start >
+          static_cast<DWORD>(std::numeric_limits<long>::max()) ||
+      before_start > static_cast<DWORD>(std::numeric_limits<long>::max())) {
+    return S_FALSE;
+  }
+
+  ITextDocument* document = nullptr;
+  HRESULT hr = QueryRichEditTextDocument(hwnd, &document);
+  if (FAILED(hr) || hr == S_FALSE) {
+    return hr;
+  }
+
+  ITextRange* range = nullptr;
+  hr = document->Range(static_cast<long>(replace_start),
+                       static_cast<long>(before_start), &range);
+  document->Release();
+  if (FAILED(hr) || range == nullptr) {
+#if defined(_DEBUG)
+    debug::DebugLog(
+        L"[MilkyWayIME][TransitoryDirectText][RichEditTomReplace]"
+        L"[RangeFailed] hr=0x" +
+        FormatHex(static_cast<std::uint32_t>(hr)) + L" replace_start=" +
+        std::to_wstring(replace_start) + L" replace_end=" +
+        std::to_wstring(before_start));
+#endif
+    SafeRelease(range);
+    return FAILED(hr) ? hr : S_FALSE;
+  }
+
+  std::wstring actual_text;
+  hr = ReadTomRangeText(range, &actual_text);
+  if (FAILED(hr)) {
+#if defined(_DEBUG)
+    debug::DebugLog(
+        L"[MilkyWayIME][TransitoryDirectText][RichEditTomReplace]"
+        L"[GetTextFailed] hr=0x" +
+        FormatHex(static_cast<std::uint32_t>(hr)));
+#endif
+    range->Release();
+    return hr;
+  }
+  if (actual_text != previous_preedit) {
+#if defined(_DEBUG)
+    debug::DebugLog(
+        L"[MilkyWayIME][TransitoryDirectText][RichEditTomReplace]"
+        L"[TextMismatch] expected=\"" +
+        DebugTextSnippet(previous_preedit) + L"\" actual=\"" +
+        DebugTextSnippet(actual_text) + L"\"");
+#endif
+    range->Release();
+    return S_FALSE;
+  }
+
+  hr = SetTomRangeText(range, replacement_text);
+  range->Release();
+  if (FAILED(hr)) {
+#if defined(_DEBUG)
+    debug::DebugLog(
+        L"[MilkyWayIME][TransitoryDirectText][RichEditTomReplace]"
+        L"[SetTextFailed] hr=0x" +
+        FormatHex(static_cast<std::uint32_t>(hr)));
+#endif
+    return hr;
+  }
+
+  std::wstring expected_text = before_text;
+  expected_text.replace(static_cast<std::size_t>(replace_start), previous_len,
+                        replacement_text);
+  const DWORD expected_caret =
+      replace_start + static_cast<DWORD>(replacement_text.size());
+  SendEditMessage(hwnd, EM_SETSEL, expected_caret, expected_caret);
+
+  std::wstring after_text;
+  DWORD after_start = 0;
+  DWORD after_end = 0;
+  if (!ReadWindowText(hwnd, &after_text) ||
+      !QueryEditSelection(hwnd, &after_start, &after_end)) {
+    return S_OK;
+  }
+
+#if defined(_DEBUG)
+  if (after_text != expected_text || after_start != expected_caret ||
+      after_end != expected_caret) {
+    debug::DebugLog(
+        L"[MilkyWayIME][TransitoryDirectText][RichEditTomReplace]"
+        L"[AfterMismatch] hwnd=" +
+        PointerToString(hwnd) + L" expected_caret=" +
+        std::to_wstring(expected_caret) + L" after_start=" +
+        std::to_wstring(after_start) + L" after_end=" +
+        std::to_wstring(after_end) + L" expected=\"" +
+        DebugTextSnippet(expected_text) + L"\" after=\"" +
+        DebugTextSnippet(after_text) + L"\"");
+  }
+  debug::DebugLog(
+      L"[MilkyWayIME][TransitoryDirectText][RichEditTomReplace][End] hwnd=" +
+      PointerToString(hwnd) + L" replace_start=" +
+      std::to_wstring(replace_start) + L" caret=" +
+      std::to_wstring(after_start) + L"," + std::to_wstring(after_end) +
+      L" previous=\"" +
+      DebugTextSnippet(previous_preedit) + L"\" replacement=\"" +
+      DebugTextSnippet(replacement_text) + L"\" text=\"" +
+      DebugTextSnippet(after_text) + L"\"");
+#endif
+  return S_OK;
+}
+
+HRESULT ReplacePreviousPreeditByRichEditRange(
+    HWND hwnd, const std::wstring& previous_preedit,
+    const std::wstring& replacement_text) {
+  HRESULT hr = ReplacePreviousPreeditByRichEditControlSelection(
+      hwnd, previous_preedit, replacement_text);
+  if (hr != S_FALSE) {
+    return hr;
+  }
+
+  return ReplacePreviousPreeditByRichEditTomRange(
+      hwnd, previous_preedit, replacement_text);
+}
+
+HRESULT ReplacePreviousPreeditByRichEditRangeFallback(
+    TfEditCookie edit_cookie, ITfContext* context, HWND hwnd,
+    const std::wstring& previous_preedit,
+    const std::wstring& replacement_text) {
+  (void)edit_cookie;
+  if (context == nullptr || hwnd == nullptr || previous_preedit.empty()) {
+#if defined(_DEBUG)
+    debug::DebugLog(
+        L"[MilkyWayIME][TransitoryDirectText][RichEditRangeFallback][Skip] "
+        L"context=" +
+        PointerToString(context) + L" hwnd=" + PointerToString(hwnd) +
+        L" previous_len=" + std::to_wstring(previous_preedit.size()));
+#endif
+    return S_FALSE;
+  }
+
+  const HRESULT hr = ReplacePreviousPreeditByRichEditRange(
+      hwnd, previous_preedit, replacement_text);
+  if (hr == S_FALSE) {
+    return S_FALSE;
+  }
+#if defined(_DEBUG)
+  debug::DebugLog(
+      L"[MilkyWayIME][TransitoryDirectText][RichEditRangeFallback][End] hr=0x" +
+      FormatHex(static_cast<std::uint32_t>(hr)) + L" hwnd=" +
+      PointerToString(hwnd) + L" previous=\"" +
+      DebugTextSnippet(previous_preedit) + L"\" replacement=\"" +
+      DebugTextSnippet(replacement_text) + L"\"");
+#endif
+  return hr;
+}
+
 HRESULT InsertTextAtSelection(TfEditCookie edit_cookie, ITfContext* context,
                               const std::wstring& text,
                               ITfRange** inserted_range_out = nullptr) {
@@ -533,6 +967,117 @@ HRESULT ReplacePreviousPreeditByHostBackspace(
   return hr;
 }
 
+HRESULT ReplaceCurrentSelectionWithText(TfEditCookie edit_cookie,
+                                        ITfContext* context,
+                                        const std::wstring& replacement_text,
+                                        bool extend_to_document_end) {
+  if (context == nullptr || replacement_text.empty()) {
+    return context == nullptr ? E_INVALIDARG : S_FALSE;
+  }
+
+  TF_SELECTION selection = {};
+  ULONG fetched = 0;
+  HRESULT hr = context->GetSelection(edit_cookie, 0, 1, &selection, &fetched);
+  if (FAILED(hr)) {
+#if defined(_DEBUG)
+    debug::DebugLog(
+        L"[MilkyWayIME][TransitoryDirectText][SelectionReplace]"
+        L"[GetSelectionFailed] hr=0x" +
+        FormatHex(static_cast<std::uint32_t>(hr)));
+#endif
+    return hr;
+  }
+  if (fetched == 0 || selection.range == nullptr) {
+#if defined(_DEBUG)
+    debug::DebugLog(
+        L"[MilkyWayIME][TransitoryDirectText][SelectionReplace]"
+        L"[NoSelection] fetched=" +
+        std::to_wstring(fetched) + L" range=" +
+        PointerToString(selection.range));
+#endif
+    return S_FALSE;
+  }
+
+  BOOL is_empty = TRUE;
+  hr = selection.range->IsEmpty(edit_cookie, &is_empty);
+  if (FAILED(hr)) {
+    selection.range->Release();
+#if defined(_DEBUG)
+    debug::DebugLog(
+        L"[MilkyWayIME][TransitoryDirectText][SelectionReplace]"
+        L"[IsEmptyFailed] hr=0x" +
+        FormatHex(static_cast<std::uint32_t>(hr)));
+#endif
+    return hr;
+  }
+  if (is_empty) {
+    selection.range->Release();
+    return S_FALSE;
+  }
+
+  if (extend_to_document_end) {
+    constexpr LONG kMaxAutocompleteTailUtf16 = 256;
+    LONG moved = 0;
+    const HRESULT shift_hr = selection.range->ShiftEnd(
+        edit_cookie, kMaxAutocompleteTailUtf16, &moved, nullptr);
+    if (FAILED(shift_hr)) {
+      selection.range->Release();
+#if defined(_DEBUG)
+      debug::DebugLog(
+          L"[MilkyWayIME][TransitoryDirectText][SelectionReplace]"
+          L"[ShiftEndFailed] hr=0x" +
+          FormatHex(static_cast<std::uint32_t>(shift_hr)));
+#endif
+      return S_FALSE;
+    }
+#if defined(_DEBUG)
+    debug::DebugLog(
+        L"[MilkyWayIME][TransitoryDirectText][SelectionReplace]"
+        L"[ExtendToDocumentEnd] moved=" +
+        std::to_wstring(moved));
+#endif
+  }
+
+  TF_SELECTION replacement_selection = {};
+  replacement_selection.range = selection.range;
+  replacement_selection.style.ase = TF_AE_NONE;
+  replacement_selection.style.fInterimChar = FALSE;
+  hr = context->SetSelection(edit_cookie, 1, &replacement_selection);
+  if (FAILED(hr)) {
+    selection.range->Release();
+#if defined(_DEBUG)
+    debug::DebugLog(
+        L"[MilkyWayIME][TransitoryDirectText][SelectionReplace]"
+        L"[SetSelectionFailed] hr=0x" +
+        FormatHex(static_cast<std::uint32_t>(hr)));
+#endif
+    return hr;
+  }
+
+  hr = selection.range->SetText(edit_cookie, 0, replacement_text.c_str(),
+                                static_cast<LONG>(replacement_text.size()));
+  if (FAILED(hr)) {
+    selection.range->Release();
+#if defined(_DEBUG)
+    debug::DebugLog(
+        L"[MilkyWayIME][TransitoryDirectText][SelectionReplace]"
+        L"[SetTextFailed] hr=0x" +
+        FormatHex(static_cast<std::uint32_t>(hr)));
+#endif
+    return hr;
+  }
+
+  hr = MoveSelectionToRangeEnd(edit_cookie, context, selection.range);
+#if defined(_DEBUG)
+  debug::DebugLog(
+      L"[MilkyWayIME][TransitoryDirectText][SelectionReplace][End] hr=0x" +
+      FormatHex(static_cast<std::uint32_t>(hr)) + L" replacement=\"" +
+      DebugTextSnippet(replacement_text) + L"\"");
+#endif
+  selection.range->Release();
+  return hr;
+}
+
 #if defined(_DEBUG)
 std::wstring DebugTextSnippet(std::wstring_view text) {
   constexpr std::size_t kMaxDebugTextLength = 32;
@@ -546,7 +1091,11 @@ std::wstring DebugTextSnippet(std::wstring_view text) {
 
 HRESULT ReplacePreviousPreedit(TfEditCookie edit_cookie, ITfContext* context,
                                const std::wstring& previous_preedit,
-                               const std::wstring& replacement_text) {
+                               const std::wstring& replacement_text,
+                               bool* selection_not_empty_out) {
+  if (selection_not_empty_out != nullptr) {
+    *selection_not_empty_out = false;
+  }
   if (context == nullptr || previous_preedit.empty()) {
 #if defined(_DEBUG)
     debug::DebugLog(
@@ -593,14 +1142,16 @@ HRESULT ReplacePreviousPreedit(TfEditCookie edit_cookie, ITfContext* context,
 #endif
     return hr;
   }
-  if (!is_empty) {
-    selection.range->Release();
+  const bool selection_not_empty = !is_empty;
+  if (selection_not_empty_out != nullptr) {
+    *selection_not_empty_out = selection_not_empty;
+  }
+  if (selection_not_empty) {
 #if defined(_DEBUG)
     debug::DebugLog(
         L"[MilkyWayIME][TransitoryDirectText][ReplacePreviousPreedit]"
         L"[SelectionNotEmpty]");
 #endif
-    return S_FALSE;
   }
 
   ITfRange* replacement_range = nullptr;
@@ -645,7 +1196,11 @@ HRESULT ReplacePreviousPreedit(TfEditCookie edit_cookie, ITfContext* context,
     return S_FALSE;
   }
 
-  std::wstring actual_text(previous_preedit.size() + 1, L'\0');
+  // Non-empty selections in transitory controls are commonly autocomplete text.
+  // Retarget the TSF selection to the verified preedit before replacing it;
+  // otherwise some hosts can keep the old preedit and insert the update.
+  const std::size_t probe_length = previous_preedit.size();
+  std::wstring actual_text(probe_length, L'\0');
   ULONG actual_length = 0;
   hr = replacement_range->GetText(
       edit_cookie, 0, actual_text.data(), static_cast<ULONG>(actual_text.size()),
@@ -657,7 +1212,7 @@ HRESULT ReplacePreviousPreedit(TfEditCookie edit_cookie, ITfContext* context,
         L"[MilkyWayIME][TransitoryDirectText][ReplacePreviousPreedit]"
         L"[GetTextFailed] hr=0x" +
         FormatHex(static_cast<std::uint32_t>(hr)) + L" requested_len=" +
-        std::to_wstring(previous_preedit.size() + 1));
+        std::to_wstring(probe_length));
 #endif
     return hr;
   }
@@ -676,6 +1231,30 @@ HRESULT ReplacePreviousPreedit(TfEditCookie edit_cookie, ITfContext* context,
     return S_FALSE;
   }
 
+  if (selection_not_empty) {
+    TF_SELECTION replacement_selection = {};
+    replacement_selection.range = replacement_range;
+    replacement_selection.style.ase = TF_AE_NONE;
+    replacement_selection.style.fInterimChar = FALSE;
+    hr = context->SetSelection(edit_cookie, 1, &replacement_selection);
+    if (FAILED(hr)) {
+#if defined(_DEBUG)
+      debug::DebugLog(
+          L"[MilkyWayIME][TransitoryDirectText][ReplacePreviousPreedit]"
+          L"[SelectPreviousPreeditFailed] hr=0x" +
+          FormatHex(static_cast<std::uint32_t>(hr)));
+#endif
+      replacement_range->Release();
+      return hr;
+    }
+#if defined(_DEBUG)
+    debug::DebugLog(
+        L"[MilkyWayIME][TransitoryDirectText][ReplacePreviousPreedit]"
+        L"[SelectedPreviousPreedit] previous=\"" +
+        DebugTextSnippet(previous_preedit) + L"\"");
+#endif
+  }
+
   hr = replacement_range->SetText(edit_cookie, 0, replacement_text.c_str(),
                                   static_cast<LONG>(replacement_text.size()));
   if (FAILED(hr)) {
@@ -690,6 +1269,17 @@ HRESULT ReplacePreviousPreedit(TfEditCookie edit_cookie, ITfContext* context,
   }
 
   hr = MoveSelectionToRangeEnd(edit_cookie, context, replacement_range);
+#if defined(_DEBUG)
+  debug::DebugLog(
+      L"[MilkyWayIME][TransitoryDirectText][ReplacePreviousPreedit][End] "
+      L"hr=0x" +
+      FormatHex(static_cast<std::uint32_t>(hr)) + L" previous=\"" +
+      DebugTextSnippet(previous_preedit) + L"\" actual=\"" +
+      DebugTextSnippet(actual_text) + L"\" replacement=\"" +
+      DebugTextSnippet(replacement_text) + L"\" selection_not_empty=" +
+      std::to_wstring(selection_not_empty ? 1 : 0) + L" moved=" +
+      std::to_wstring(moved));
+#endif
   replacement_range->Release();
   return hr;
 }
@@ -779,34 +1369,175 @@ HRESULT TransitoryDirectTextComposition::Apply(
   const bool had_active_state = active_;
   const bool state_matches =
       active_ && context_identity_ == context && view_hwnd_ == snapshot.view_hwnd;
+  const std::wstring previous_visible_preedit = last_preedit_;
   std::wstring replacement_text = commit_text;
   if (plan.has_preedit) {
     replacement_text += preedit_text;
   }
+#if defined(_DEBUG)
+  std::wstring write_path;
+#endif
+  const bool update_only =
+      commit_text.empty() && plan.has_preedit && !preedit_text.empty();
 
   if (state_matches) {
-    hr = ReplacePreviousPreedit(edit_cookie, context, last_preedit_,
-                                replacement_text);
-    if (SUCCEEDED(hr) && hr != S_FALSE) {
-      wrote_text = true;
+    if (!deferred_autocomplete_update_ &&
+        ShouldAppendTransitoryRepeatCommit(last_preedit_, commit_text,
+                                           plan.has_preedit, preedit_text)) {
+      bool selection_not_empty = false;
+      const HRESULT selection_hr =
+          QuerySelectionNotEmpty(edit_cookie, context, &selection_not_empty);
+      if (selection_hr == S_OK && !selection_not_empty) {
+        hr = InsertTextAtSelection(edit_cookie, context, commit_text);
+        if (FAILED(hr)) {
+          Reset(L"repeat_append_failed");
+          return hr;
+        }
+        if (hr != S_FALSE) {
+          wrote_text = true;
+          deferred_autocomplete_update_ = false;
+#if defined(_DEBUG)
+          write_path = L"append_repeated_preedit_commit";
+#endif
+#if defined(_DEBUG)
+          debug::DebugLog(
+              L"[MilkyWayIME][TransitoryDirectText][Apply]"
+              L"[AppendRepeatedPreeditCommit] text=\"" +
+              DebugTextSnippet(commit_text) + L"\"");
+#endif
+        }
+      }
     }
 
-    if (hr == S_FALSE && IsWin32EditTarget(snapshot.target)) {
+    if (update_only) {
+      bool selection_not_empty = false;
+      hr = QuerySelectionNotEmpty(edit_cookie, context, &selection_not_empty);
+      if (FAILED(hr)) {
+        Reset(L"selection_probe_failed");
+        return hr;
+      }
+      if (hr != S_FALSE && selection_not_empty) {
+        deferred_autocomplete_update_ = true;
+#if defined(_DEBUG)
+        debug::DebugLog(
+            L"[MilkyWayIME][TransitoryDirectText][Apply]"
+            L"[DeferAutocompleteUpdate] context=" +
+            PointerToString(context) + L" visible_preedit=\"" +
+            last_preedit_ + L"\" deferred_preedit=\"" + preedit_text + L"\"");
+        debug::DebugLog(
+            L"[MilkyWayIME][TransitoryDirectText][Apply][End] hr=0x" +
+            FormatHex(static_cast<std::uint32_t>(S_OK)) + L" active=" +
+            std::to_wstring(active_ ? 1 : 0) + L" last_preedit=\"" +
+            last_preedit_ + L"\" deferred_autocomplete_update=1");
+#endif
+        return S_OK;
+      }
+    }
+
+    if (deferred_autocomplete_update_ && plan.has_preedit &&
+        !commit_text.empty() && commit_text == last_preedit_) {
+      bool selection_not_empty = false;
+      hr = QuerySelectionNotEmpty(edit_cookie, context, &selection_not_empty);
+      if (FAILED(hr)) {
+        Reset(L"selection_probe_failed");
+        return hr;
+      }
+      if (hr != S_FALSE && selection_not_empty) {
+        hr = ReplaceCurrentSelectionWithText(edit_cookie, context, preedit_text,
+                                             true);
+        if (SUCCEEDED(hr) && hr != S_FALSE) {
+          wrote_text = true;
+          deferred_autocomplete_update_ = false;
+#if defined(_DEBUG)
+          write_path = L"consume_deferred_autocomplete_update";
+#endif
+#if defined(_DEBUG)
+          debug::DebugLog(
+              L"[MilkyWayIME][TransitoryDirectText][Apply]"
+              L"[ConsumeDeferredAutocompleteUpdate] committed=\"" +
+              commit_text + L"\" preedit=\"" + preedit_text + L"\"");
+#endif
+        }
+        if (FAILED(hr)) {
+          Reset(L"selection_replace_failed");
+          return hr;
+        }
+      }
+    }
+
+    bool replacement_selection_not_empty = false;
+    if (!wrote_text) {
+      hr = ReplacePreviousPreedit(edit_cookie, context, last_preedit_,
+                                  replacement_text,
+                                  &replacement_selection_not_empty);
+      if (SUCCEEDED(hr) && hr != S_FALSE) {
+        wrote_text = true;
+        deferred_autocomplete_update_ = false;
+#if defined(_DEBUG)
+        write_path = L"replace_previous_preedit";
+#endif
+      }
+    }
+
+    const bool can_use_host_fallback = !replacement_selection_not_empty;
+    if (hr == S_FALSE && can_use_host_fallback &&
+        CanUseRichEditRangeReplacementForTransitoryDirectText(
+            snapshot.target)) {
+      hr = ReplacePreviousPreeditByRichEditRangeFallback(
+          edit_cookie, context, snapshot.view_hwnd, last_preedit_,
+          replacement_text);
+      if (SUCCEEDED(hr) && hr != S_FALSE) {
+        wrote_text = true;
+        deferred_autocomplete_update_ = false;
+#if defined(_DEBUG)
+        write_path = L"richedit_range_fallback";
+#endif
+      }
+    }
+
+    if (hr == S_FALSE && can_use_host_fallback &&
+        CanUseWin32SelectionReplacementForTransitoryDirectText(
+            snapshot.target)) {
       hr = ReplacePreviousPreeditByWin32EditFallback(
           edit_cookie, context, snapshot.view_hwnd, last_preedit_,
           replacement_text);
       if (SUCCEEDED(hr) && hr != S_FALSE) {
         wrote_text = true;
+        deferred_autocomplete_update_ = false;
+#if defined(_DEBUG)
+        write_path = L"win32_selection_fallback";
+#endif
       }
     }
 
-    if (hr == S_FALSE && !IsWin32EditTarget(snapshot.target)) {
+    // Reference TSF IMEs keep composition updates inside verified TSF ranges.
+    // If a host-specific replacement path cannot verify the previous preedit,
+    // synthetic Backspace is too likely to modify unrelated selected text.
+    if (hr == S_FALSE && can_use_host_fallback &&
+        !CanUseWin32SelectionReplacementForTransitoryDirectText(
+            snapshot.target) &&
+        !CanUseRichEditRangeReplacementForTransitoryDirectText(
+            snapshot.target)) {
       hr = ReplacePreviousPreeditByHostBackspace(
           edit_cookie, context, snapshot.view_hwnd, last_preedit_,
           replacement_text);
       if (SUCCEEDED(hr) && hr != S_FALSE) {
         wrote_text = true;
+        deferred_autocomplete_update_ = false;
+#if defined(_DEBUG)
+        write_path = L"host_backspace_fallback";
+#endif
       }
+    }
+
+    if (hr == S_FALSE && !can_use_host_fallback) {
+#if defined(_DEBUG)
+      debug::DebugLog(
+          L"[MilkyWayIME][TransitoryDirectText][Apply]"
+          L"[SkipHostFallbackSelectionNotEmpty] context=" +
+          PointerToString(context) + L" previous=\"" + last_preedit_ +
+          L"\"");
+#endif
     }
 
     if (hr == S_FALSE) {
@@ -843,6 +1574,10 @@ HRESULT TransitoryDirectTextComposition::Apply(
       Reset(L"insert_failed");
       return hr;
     }
+    deferred_autocomplete_update_ = false;
+#if defined(_DEBUG)
+    write_path = L"insert_at_selection";
+#endif
   }
 
   if (plan.has_preedit && !preedit_text.empty()) {
@@ -859,7 +1594,11 @@ HRESULT TransitoryDirectTextComposition::Apply(
       L"[MilkyWayIME][TransitoryDirectText][Apply][End] hr=0x" +
       FormatHex(static_cast<std::uint32_t>(hr)) + L" active=" +
       std::to_wstring(active_ ? 1 : 0) + L" last_preedit=\"" + last_preedit_ +
-      L"\"");
+      L"\" wrote_text=" + std::to_wstring(wrote_text ? 1 : 0) +
+      L" write_path=\"" + write_path + L"\" previous_preedit=\"" +
+      DebugTextSnippet(previous_visible_preedit) + L"\" replacement=\"" +
+      DebugTextSnippet(replacement_text) + L"\" deferred_autocomplete_update=" +
+      std::to_wstring(deferred_autocomplete_update_ ? 1 : 0));
 #endif
   return hr;
 }
@@ -879,6 +1618,7 @@ void TransitoryDirectTextComposition::Reset(const wchar_t* reason) {
   context_identity_ = nullptr;
   view_hwnd_ = nullptr;
   last_preedit_.clear();
+  deferred_autocomplete_update_ = false;
 }
 
 }  // namespace milkyway::tsf::edit

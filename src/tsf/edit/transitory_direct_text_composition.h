@@ -57,6 +57,16 @@ inline bool IsTransitoryDirectTextTarget(
   return target.is_transitory;
 }
 
+inline bool CanUseWin32SelectionReplacementForTransitoryDirectText(
+    const TransitoryDirectTextTarget& target) {
+  return target.view_class == L"Edit";
+}
+
+inline bool CanUseRichEditRangeReplacementForTransitoryDirectText(
+    const TransitoryDirectTextTarget& target) {
+  return target.view_class == L"RICHEDIT50W";
+}
+
 inline bool ShouldUseTransitoryDirectTextComposition(
     const TransitoryDirectTextTarget& target,
     const std::vector<TextEditOperation>& operations, bool is_active) {
@@ -66,6 +76,16 @@ inline bool ShouldUseTransitoryDirectTextComposition(
   const TransitoryDirectTextOperationPlan plan =
       BuildTransitoryDirectTextOperationPlan(operations);
   return plan.has_composition_operation || is_active;
+}
+
+inline bool ShouldAppendTransitoryRepeatCommit(
+    const std::wstring& last_preedit,
+    const std::wstring& commit_text,
+    bool has_preedit,
+    const std::wstring& preedit_text) {
+  return has_preedit && !last_preedit.empty() && !commit_text.empty() &&
+         !preedit_text.empty() && last_preedit == commit_text &&
+         commit_text == preedit_text;
 }
 
 class TransitoryDirectTextComposition final {
@@ -85,6 +105,7 @@ class TransitoryDirectTextComposition final {
   ITfContext* context_identity_ = nullptr;
   HWND view_hwnd_ = nullptr;
   std::wstring last_preedit_;
+  bool deferred_autocomplete_update_ = false;
 };
 
 }  // namespace milkyway::tsf::edit

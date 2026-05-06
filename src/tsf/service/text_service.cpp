@@ -248,6 +248,26 @@ bool TextService::OnSelectionMovedOutsideComposition() {
       engine::session::CompositionEndReason::kSelectionMoved);
 }
 
+bool TextService::PrepareHostBypass() {
+  if (!session_->IsComposing()) {
+    composer_->Reset();
+    return false;
+  }
+
+  return EndActiveComposition(
+      engine::session::CompositionEndReason::kShortcutBypass);
+}
+
+bool TextService::ResetCompositionForHostSelection() {
+  if (!session_->IsComposing()) {
+    composer_->Reset();
+    return false;
+  }
+
+  ResetInternalState(engine::session::CompositionEndReason::kSelectionMoved);
+  return true;
+}
+
 void TextService::OnCompositionTerminated() {
 #if defined(_WIN32) && defined(_DEBUG)
   debug::DebugLog(

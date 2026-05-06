@@ -1603,7 +1603,10 @@ void TestTextEditPlanPreservesEmptyCompositionUpdateBeforeCompletion() {
 
 void TestTransitoryDirectTextCompositionGateAndPlan() {
   using milkyway::tsf::edit::BuildTransitoryDirectTextOperationPlan;
+  using milkyway::tsf::edit::CanUseRichEditRangeReplacementForTransitoryDirectText;
+  using milkyway::tsf::edit::CanUseWin32SelectionReplacementForTransitoryDirectText;
   using milkyway::tsf::edit::ShouldUseTransitoryDirectTextComposition;
+  using milkyway::tsf::edit::ShouldAppendTransitoryRepeatCommit;
   using milkyway::tsf::edit::TransitoryDirectTextTarget;
 
   const TransitoryDirectTextTarget rider_target{
@@ -1617,7 +1620,9 @@ void TestTransitoryDirectTextCompositionGateAndPlan() {
   const TransitoryDirectTextTarget perforce_popup{
       L"p4v.exe", L"Qt5152QWindowIcon", true};
   const TransitoryDirectTextTarget edit_popup{
-      L"Everything.exe", L"Edit", true};
+      L"host.exe", L"Edit", true};
+  const TransitoryDirectTextTarget rich_edit_target{
+      L"host.exe", L"RICHEDIT50W", true};
 
   const std::vector<TextEditOperation> commit_only = {
       {TextEditOperationType::kCommitText, "a"}};
@@ -1635,6 +1640,18 @@ void TestTransitoryDirectTextCompositionGateAndPlan() {
                                                   true));
   assert(ShouldUseTransitoryDirectTextComposition(edit_popup, commit_only,
                                                   true));
+  assert(ShouldUseTransitoryDirectTextComposition(rich_edit_target,
+                                                  commit_only, true));
+  assert(CanUseWin32SelectionReplacementForTransitoryDirectText(edit_popup));
+  assert(!CanUseWin32SelectionReplacementForTransitoryDirectText(
+      rich_edit_target));
+  assert(!CanUseWin32SelectionReplacementForTransitoryDirectText(
+      rider_target));
+  assert(CanUseRichEditRangeReplacementForTransitoryDirectText(
+      rich_edit_target));
+  assert(!CanUseRichEditRangeReplacementForTransitoryDirectText(edit_popup));
+  assert(!CanUseRichEditRangeReplacementForTransitoryDirectText(
+      rider_target));
 
   constexpr const char* kPieup = "\xE3\x85\x8D";
   constexpr const char* kPo = "\xED\x8F\xAC";
@@ -1682,6 +1699,15 @@ void TestTransitoryDirectTextCompositionGateAndPlan() {
   assert(commit_and_next_preedit_plan.commit_text == kPon);
   assert(commit_and_next_preedit_plan.preedit_text == kTieut);
   assert(commit_and_next_preedit_plan.has_preedit);
+
+  assert(ShouldAppendTransitoryRepeatCommit(L"\u314B", L"\u314B", true,
+                                            L"\u314B"));
+  assert(!ShouldAppendTransitoryRepeatCommit(L"\u314B", L"\u314B", true,
+                                             L"\u314C"));
+  assert(!ShouldAppendTransitoryRepeatCommit(L"\uD3F0", L"\uD3F0", true,
+                                             L"\u314C"));
+  assert(!ShouldAppendTransitoryRepeatCommit(L"\u314B", L"\u314B", false,
+                                             L"\u314B"));
 
   const std::vector<TextEditOperation> update_teu = {
       {TextEditOperationType::kUpdateComposition, kTeu}};

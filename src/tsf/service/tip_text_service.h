@@ -185,6 +185,15 @@ class TipTextService final : public ITfTextInputProcessorEx,
       WPARAM wparam, LPARAM lparam,
       const engine::state::ModifierState& modifiers,
       engine::key::KeyTransition transition) const;
+  bool HasNonEmptySelection(ITfContext* context) const;
+  bool ShouldLetHostHandleSelectionBackspace(
+      ITfContext* context, WPARAM wparam,
+      const engine::state::ModifierState& modifiers) const;
+  bool ShouldBypassComposingForHostKey(
+      WPARAM wparam, const engine::state::ModifierState& modifiers) const;
+  void PrepareCompositionForHostBypass(ITfContext* context,
+                                       const wchar_t* origin);
+  void ResetCompositionForHostSelectionBackspace(const wchar_t* origin);
   bool SelectionInsideComposition(ITfContext* context,
                                   TfEditCookie read_cookie) const;
   void SetImeOpen(bool open);

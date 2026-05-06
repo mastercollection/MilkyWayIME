@@ -185,6 +185,43 @@ bool IsHanjaVirtualKey(WPARAM wparam) {
   return key == VK_HANJA || key == VK_KANJI;
 }
 
+bool IsShiftSelectionOrNavigationVirtualKey(WPARAM wparam) {
+  switch (static_cast<std::uint16_t>(wparam)) {
+    case VK_LEFT:
+    case VK_RIGHT:
+    case VK_UP:
+    case VK_DOWN:
+    case VK_HOME:
+    case VK_END:
+    case VK_PRIOR:
+    case VK_NEXT:
+    case VK_INSERT:
+    case VK_DELETE:
+    case VK_BACK:
+    case VK_TAB:
+    case VK_ESCAPE:
+      return true;
+    default:
+      return false;
+  }
+}
+
+bool IsCaretNavigationVirtualKey(WPARAM wparam) {
+  switch (static_cast<std::uint16_t>(wparam)) {
+    case VK_LEFT:
+    case VK_RIGHT:
+    case VK_UP:
+    case VK_DOWN:
+    case VK_HOME:
+    case VK_END:
+    case VK_PRIOR:
+    case VK_NEXT:
+      return true;
+    default:
+      return false;
+  }
+}
+
 constexpr GUID kImeModePreservedKeyGuid = {
     0x7774b3e6,
     0xf464,
@@ -1977,6 +2014,19 @@ STDMETHODIMP TipTextService::OnTestKeyDown(ITfContext* context, WPARAM wparam,
     return S_OK;
   }
 
+  if (ShouldBypassComposingForHostKey(wparam, modifiers)) {
+    ClearPendingKeyResult();
+    PrepareCompositionForHostBypass(context, L"OnTestKeyDown(HostBypassKey)");
+    return S_OK;
+  }
+
+  if (ShouldLetHostHandleSelectionBackspace(context, wparam, modifiers)) {
+    ClearPendingKeyResult();
+    ResetCompositionForHostSelectionBackspace(
+        L"OnTestKeyDown(HostSelectionBackspace)");
+    return S_OK;
+  }
+
   if (!ime_open_ && !(modifiers.ctrl || modifiers.alt || modifiers.win)) {
     ClearPendingKeyResult();
     return S_OK;
@@ -2010,11 +2060,11 @@ STDMETHODIMP TipTextService::OnKeyDown(ITfContext* context, WPARAM wparam,
 #endif
     ClearPendingKeyResult();
     logic_.PrepareImeModeToggle();
-    ResetTransitoryDirectTextComposition(L"OnKeyDown(VK_HANGUL)");
-    ResetTransitoryCompositionBridge(L"OnKeyDown(VK_HANGUL)");
     if (!FinalizeImeModeToggle(context, L"OnKeyDown(VK_HANGUL)")) {
       SyncCompositionTermination();
     }
+    ResetTransitoryDirectTextComposition(L"OnKeyDown(VK_HANGUL)");
+    ResetTransitoryCompositionBridge(L"OnKeyDown(VK_HANGUL)");
 #if defined(_DEBUG)
     debug::DebugLog(L"[MilkyWayIME][OnKeyDown][VK_HANGUL][Done] ime_open_after=" +
                     std::to_wstring(ime_open_ ? 1 : 0));
@@ -2053,6 +2103,19 @@ STDMETHODIMP TipTextService::OnKeyDown(ITfContext* context, WPARAM wparam,
   }
 
   if (context == nullptr) {
+    return S_OK;
+  }
+
+  if (ShouldBypassComposingForHostKey(wparam, modifiers)) {
+    ClearPendingKeyResult();
+    PrepareCompositionForHostBypass(context, L"OnKeyDown(HostBypassKey)");
+    return S_OK;
+  }
+
+  if (ShouldLetHostHandleSelectionBackspace(context, wparam, modifiers)) {
+    ClearPendingKeyResult();
+    ResetCompositionForHostSelectionBackspace(
+        L"OnKeyDown(HostSelectionBackspace)");
     return S_OK;
   }
 
@@ -2195,13 +2258,13 @@ STDMETHODIMP TipTextService::OnPreservedKey(ITfContext* context, REFGUID rguid,
                   std::to_wstring(ime_open_ ? 1 : 0));
 #endif
   logic_.PrepareImeModeToggle();
-  ResetTransitoryDirectTextComposition(L"OnPreservedKey(VK_HANGUL)");
-  ResetTransitoryCompositionBridge(L"OnPreservedKey(VK_HANGUL)");
   ITfContext* toggle_context =
       context != nullptr ? context : text_edit_sink_context_;
   if (!FinalizeImeModeToggle(toggle_context, L"OnPreservedKey(VK_HANGUL)")) {
     SyncCompositionTermination();
   }
+  ResetTransitoryDirectTextComposition(L"OnPreservedKey(VK_HANGUL)");
+  ResetTransitoryCompositionBridge(L"OnPreservedKey(VK_HANGUL)");
 #if defined(_DEBUG)
   debug::DebugLog(L"[MilkyWayIME][OnPreservedKey][VK_HANGUL][Done] ime_open_after=" +
                   std::to_wstring(ime_open_ ? 1 : 0));
@@ -3272,6 +3335,114 @@ engine::key::NormalizedKeyEvent TipTextService::BuildNormalizedKeyEvent(
                                             modifiers, transition);
 }
 
+bool TipTextService::HasNonEmptySelection(ITfContext* context) const {
+  if (context == nullptr || client_id_ == TF_CLIENTID_NULL) {
+    return false;
+  }
+
+  SelectionTextSnapshot snapshot;
+  SelectionTextReadEditSession* edit_session =
+      new (std::nothrow) SelectionTextReadEditSession(context, &snapshot);
+  if (edit_session == nullptr) {
+    return false;
+  }
+
+  HRESULT edit_session_result = E_FAIL;
+  const HRESULT hr = context->RequestEditSession(
+      client_id_, edit_session, TF_ES_SYNC | TF_ES_READ, &edit_session_result);
+  edit_session->Release();
+  if (FAILED(hr) || FAILED(edit_session_result)) {
+    return false;
+  }
+
+  return snapshot.has_selection && !snapshot.is_empty;
+}
+
+bool TipTextService::ShouldLetHostHandleSelectionBackspace(
+    ITfContext* context, WPARAM wparam,
+    const engine::state::ModifierState& modifiers) const {
+  if (static_cast<std::uint16_t>(wparam) != VK_BACK || modifiers.ctrl ||
+      modifiers.alt || modifiers.win) {
+    return false;
+  }
+  if (!ime_open_ || !session_.IsComposing() ||
+      !transitory_direct_text_.IsActive()) {
+    return false;
+  }
+  return HasNonEmptySelection(context);
+}
+
+bool TipTextService::ShouldBypassComposingForHostKey(
+    WPARAM wparam, const engine::state::ModifierState& modifiers) const {
+  if (!session_.IsComposing() || candidate::IsPureModifierVirtualKey(wparam) ||
+      IsImeModeToggleVirtualKey(wparam) || IsHanjaVirtualKey(wparam)) {
+    return false;
+  }
+
+  if (static_cast<std::uint16_t>(wparam) == VK_RETURN) {
+    return true;
+  }
+
+  if (modifiers.ctrl || modifiers.alt || modifiers.win) {
+    return true;
+  }
+
+  if (IsCaretNavigationVirtualKey(wparam)) {
+    return true;
+  }
+
+  return modifiers.shift && IsShiftSelectionOrNavigationVirtualKey(wparam);
+}
+
+void TipTextService::PrepareCompositionForHostBypass(ITfContext* context,
+                                                     const wchar_t* origin) {
+#if defined(_DEBUG)
+  debug::DebugLog(
+      L"[MilkyWayIME][HostBypassKey] origin=" +
+      std::wstring(origin != nullptr ? origin : L"<null>") +
+      L" session_composing=" +
+      std::to_wstring(session_.IsComposing() ? 1 : 0) +
+      L" tracked_composition=" + PointerToString(composition_) +
+      L" transitory_direct_active=" +
+      std::to_wstring(transitory_direct_text_.IsActive() ? 1 : 0) +
+      L" transitory_bridge_active=" +
+      std::to_wstring(transitory_composition_bridge_.IsActive() ? 1 : 0));
+#endif
+
+  logic_.PrepareHostBypass();
+  if (edit_sink_.HasPendingOperations()) {
+    if (context != nullptr) {
+      const HRESULT hr = FlushPendingOperations(
+          context, EditSessionRequestPolicy::kSyncPreferredWrite, origin);
+      if (FAILED(hr)) {
+        SyncCompositionTermination();
+      }
+    } else {
+      edit_sink_.ClearPendingOperations();
+    }
+  }
+  ResetTransitoryDirectTextComposition(origin);
+  ResetTransitoryCompositionBridge(origin);
+  ClearCompositionTracking();
+}
+
+void TipTextService::ResetCompositionForHostSelectionBackspace(
+    const wchar_t* origin) {
+#if defined(_DEBUG)
+  debug::DebugLog(
+      L"[MilkyWayIME][HostSelectionBackspaceBypass] origin=" +
+      std::wstring(origin != nullptr ? origin : L"<null>") +
+      L" session_composing=" +
+      std::to_wstring(session_.IsComposing() ? 1 : 0) +
+      L" transitory_direct_active=" +
+      std::to_wstring(transitory_direct_text_.IsActive() ? 1 : 0));
+#endif
+  logic_.ResetCompositionForHostSelection();
+  ResetTransitoryDirectTextComposition(origin);
+  ResetTransitoryCompositionBridge(origin);
+  ClearCompositionTracking();
+}
+
 bool TipTextService::SelectionInsideComposition(ITfContext* context,
                                                 TfEditCookie read_cookie) const {
   if (context == nullptr || composition_ == nullptr ||
@@ -3589,11 +3760,11 @@ bool TipTextService::FinalizeImeModeToggle(ITfContext* context,
 
 void TipTextService::ToggleImeModeFromLanguageBar() {
   logic_.PrepareImeModeToggle();
-  ResetTransitoryDirectTextComposition(L"LangBarClick");
-  ResetTransitoryCompositionBridge(L"LangBarClick");
   if (!FinalizeImeModeToggle(text_edit_sink_context_, L"LangBarClick")) {
     SyncCompositionTermination();
   }
+  ResetTransitoryDirectTextComposition(L"LangBarClick");
+  ResetTransitoryCompositionBridge(L"LangBarClick");
 }
 
 void TipTextService::HandleShortcutAction(

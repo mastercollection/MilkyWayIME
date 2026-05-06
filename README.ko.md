@@ -96,6 +96,19 @@ libhangul:3sin-p2
 - caret 변환 후보창이 열린 상태에서 Hanja 키를 다시 누르면 현재 후보를 확정하지 않고 다음 사전 segment 후보로 이동합니다.
 - 형태소 분석, 조사 분리, 선택 영역 내부 검색은 아직 하지 않습니다.
 
+## 전이 편집 호환성
+
+일부 앱은 입력창을 일반 TSF 조합 context가 아니라 transitory context로 노출합니다.
+이 경우 MilkyWayIME는 검증 가능한 TSF range를 우선 `SetText`로 교체하고, 실패할 때만
+호스트 입력창에 직접 대체 동작을 시도합니다.
+
+`Edit` 컨트롤인 경우에는 `EM_SETSEL` / `EM_REPLACESEL`로 이전 preedit가 caret 바로
+앞에 있는지 확인한 뒤 교체합니다. transitory `RICHEDIT50W` 컨트롤에서는 Win32
+selection/text API로 이전 preedit가 caret 바로 앞에 있음을 먼저 검증하고, 검증되면
+RichEdit TOM range로 현재 selection을 이전 preedit 범위로 바꾸지 않고 교체합니다.
+RichEdit range를 검증하지 못한 경우에는 synthetic host `Backspace` fallback을 사용하지
+않습니다.
+
 ## 커스텀 한글 자판
 
 커스텀 한글 자판은 MilkyWayIME JSON이 아니라 libhangul XML 형식을 기준으로 설계합니다.

@@ -54,6 +54,8 @@ class TextService {
   bool PrepareLayoutChange();
   bool OnFocusLost();
   bool OnSelectionMovedOutsideComposition();
+  bool PrepareHostBypass();
+  bool ResetCompositionForHostSelection();
   void OnCompositionTerminated();
 #if defined(_DEBUG)
   char DebugToAscii(const engine::key::PhysicalKey& key,

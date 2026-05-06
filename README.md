@@ -257,10 +257,31 @@ Use the current build only as a developer smoke test target.
    - `ㅁ` followed by the Hanja key opens symbol candidates including `※`.
    - Candidate colors follow the Windows app light/dark theme and high contrast
      system colors.
+   - In transitory edit hosts with selected autocomplete text, type a Hangul
+     phrase; the committed syllable must not be duplicated beside the update.
 
 Candidate lookup is exact dictionary lookup over the selected prefix or caret
 run segment; morphology, particle splitting, and selection-internal searching
 remain out of scope.
+
+## Transitory Edit Compatibility
+
+Some hosts expose editable input through a transitory TSF context and may select
+host-owned text while Hangul composition is still active. MilkyWayIME follows
+the range-update pattern used by the DIME, MetasequoiaImeTsf, and
+windows-chewing-tsf references: replace verified TSF ranges with `SetText`
+whenever possible. When a transitory host exposes a non-empty selection during a
+preedit-only update, MilkyWayIME defers that update and consumes the selected
+suffix only after the engine emits the matching commit plus the next preedit.
+This avoids synthetic host `Backspace` and selection-state behavior where
+`SetText` can keep the old preedit and insert the update beside it.
+
+For transitory `RICHEDIT50W` controls, MilkyWayIME first verifies through
+Win32 selection and text APIs that the previous preedit is immediately before
+the caret, then uses a RichEdit TOM range to replace that text without selecting
+the previous preedit in the host control. If the range cannot be verified,
+MilkyWayIME does not fall back to synthetic host `Backspace` for that RichEdit
+path.
 
 ## Test Execution
 
