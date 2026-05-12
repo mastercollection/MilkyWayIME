@@ -5,6 +5,7 @@
 #include <array>
 #include <cstdint>
 #include <filesystem>
+#include <imm.h>
 #include <iterator>
 #include <limits>
 #include <new>
@@ -25,6 +26,14 @@ namespace {
 struct ContextTargetSnapshot {
   TransitoryDirectTextTarget target;
   HWND view_hwnd = nullptr;
+};
+
+struct DocumentFeedProbeResult {
+  bool was_checked = false;
+  bool size_sent = false;
+  DWORD_PTR size_result = 0;
+  DWORD size_error = ERROR_SUCCESS;
+  bool is_available = false;
 };
 
 template <typename Interface>
@@ -117,6 +126,48 @@ ContextTargetSnapshot CaptureTargetSnapshot(ITfContext* context) {
   }
 
   return snapshot;
+}
+
+DocumentFeedProbeResult ProbeImmDocumentFeed(HWND hwnd) {
+  DocumentFeedProbeResult result;
+  result.was_checked = true;
+  if (hwnd == nullptr) {
+    return result;
+  }
+
+  constexpr UINT kProbeTimeoutMs = 100;
+  SetLastError(ERROR_SUCCESS);
+  result.size_sent =
+      SendMessageTimeoutW(hwnd, WM_IME_REQUEST,
+                          static_cast<WPARAM>(IMR_DOCUMENTFEED), 0,
+                          SMTO_ABORTIFHUNG | SMTO_BLOCK, kProbeTimeoutMs,
+                          &result.size_result) != 0;
+  result.size_error = GetLastError();
+  result.is_available =
+      result.size_sent && result.size_result >= sizeof(RECONVERTSTRING);
+  return result;
+}
+
+bool HasVerifiedNativeReplacementBackend(
+    const TransitoryDirectTextTarget& target) {
+  return CanUseWin32SelectionReplacementForTransitoryDirectText(target) ||
+         CanUseRichEditRangeReplacementForTransitoryDirectText(target);
+}
+
+bool ShouldBypassTransitoryDirectTextForOpaqueTarget(
+    const TransitoryDirectTextTarget& target, HWND hwnd,
+    const TransitoryDirectTextOperationPlan& plan, bool is_active,
+    DocumentFeedProbeResult* probe_out) {
+  if (!target.is_transitory || is_active || !plan.has_composition_operation ||
+      HasVerifiedNativeReplacementBackend(target)) {
+    return false;
+  }
+
+  const DocumentFeedProbeResult probe = ProbeImmDocumentFeed(hwnd);
+  if (probe_out != nullptr) {
+    *probe_out = probe;
+  }
+  return !probe.is_available;
 }
 
 HRESULT MoveSelectionToRangeEnd(TfEditCookie edit_cookie, ITfContext* context,
@@ -1293,6 +1344,19 @@ std::wstring PlanDebugText(const TransitoryDirectTextOperationPlan& plan) {
          L" has_composition_operation=" +
          std::to_wstring(plan.has_composition_operation ? 1 : 0);
 }
+
+std::wstring DocumentFeedProbeDebugText(
+    const DocumentFeedProbeResult& probe) {
+  return L" document_feed_checked=" +
+         std::to_wstring(probe.was_checked ? 1 : 0) +
+         L" document_feed_size_sent=" +
+         std::to_wstring(probe.size_sent ? 1 : 0) +
+         L" document_feed_size_result=" +
+         std::to_wstring(probe.size_result) +
+         L" document_feed_size_error=0x" + FormatHex(probe.size_error) +
+         L" document_feed_available=" +
+         std::to_wstring(probe.is_available ? 1 : 0);
+}
 #endif
 
 }  // namespace
@@ -1304,8 +1368,15 @@ bool TransitoryDirectTextComposition::IsActive() const {
 bool TransitoryDirectTextComposition::ShouldUse(
     ITfContext* context, const std::vector<TextEditOperation>& operations) const {
   const ContextTargetSnapshot snapshot = CaptureTargetSnapshot(context);
+  const TransitoryDirectTextOperationPlan plan =
+      BuildTransitoryDirectTextOperationPlan(operations);
   const bool should_use = ShouldUseTransitoryDirectTextComposition(
       snapshot.target, operations, active_);
+  DocumentFeedProbeResult document_feed_probe;
+  const bool bypass_opaque_target =
+      should_use && ShouldBypassTransitoryDirectTextForOpaqueTarget(
+                        snapshot.target, snapshot.view_hwnd, plan, active_,
+                        &document_feed_probe);
 #if defined(_DEBUG)
   if (should_use) {
     debug::DebugLog(
@@ -1315,10 +1386,16 @@ bool TransitoryDirectTextComposition::ShouldUse(
         std::to_wstring(snapshot.target.is_transitory ? 1 : 0) +
         L" active=" + std::to_wstring(active_ ? 1 : 0) +
         L" context=" + PointerToString(context) + L" view_hwnd=" +
-        PointerToString(snapshot.view_hwnd));
+        PointerToString(snapshot.view_hwnd) + L" has_native_backend=" +
+        std::to_wstring(
+            HasVerifiedNativeReplacementBackend(snapshot.target) ? 1 : 0) +
+        L" bypass_opaque_target=" +
+        std::to_wstring(bypass_opaque_target ? 1 : 0) +
+        DocumentFeedProbeDebugText(document_feed_probe) +
+        PlanDebugText(plan));
   }
 #endif
-  return should_use;
+  return should_use && !bypass_opaque_target;
 }
 
 ITfContext* TransitoryDirectTextComposition::ResolveFullContextFromTransitory(
@@ -1337,13 +1414,36 @@ HRESULT TransitoryDirectTextComposition::Apply(
   }
 
   const ContextTargetSnapshot snapshot = CaptureTargetSnapshot(context);
+  const TransitoryDirectTextOperationPlan plan =
+      BuildTransitoryDirectTextOperationPlan(operations);
   if (!ShouldUseTransitoryDirectTextComposition(snapshot.target, operations,
                                                active_)) {
     return S_FALSE;
   }
 
-  const TransitoryDirectTextOperationPlan plan =
-      BuildTransitoryDirectTextOperationPlan(operations);
+  DocumentFeedProbeResult document_feed_probe;
+  const bool bypass_opaque_target =
+      ShouldBypassTransitoryDirectTextForOpaqueTarget(
+          snapshot.target, snapshot.view_hwnd, plan, active_,
+          &document_feed_probe);
+  if (bypass_opaque_target) {
+#if defined(_DEBUG)
+    debug::DebugLog(
+        L"[MilkyWayIME][TransitoryDirectText][Apply][BypassOpaqueTarget] "
+        L"context=" +
+        PointerToString(context) + L" view_hwnd=" +
+        PointerToString(snapshot.view_hwnd) + L" process=" +
+        snapshot.target.process_name + L" view_class=" +
+        snapshot.target.view_class + L" active=" +
+        std::to_wstring(active_ ? 1 : 0) + L" has_native_backend=" +
+        std::to_wstring(
+            HasVerifiedNativeReplacementBackend(snapshot.target) ? 1 : 0) +
+        DocumentFeedProbeDebugText(document_feed_probe) +
+        PlanDebugText(plan));
+#endif
+    return S_FALSE;
+  }
+
   const std::wstring commit_text = Utf8ToWide(plan.commit_text);
   const std::wstring preedit_text = Utf8ToWide(plan.preedit_text);
   const bool should_write = !commit_text.empty() || plan.has_preedit;
@@ -1352,7 +1452,14 @@ HRESULT TransitoryDirectTextComposition::Apply(
   debug::DebugLog(
       L"[MilkyWayIME][TransitoryDirectText][Apply][Begin] context=" +
       PointerToString(context) + L" view_hwnd=" +
-      PointerToString(snapshot.view_hwnd) + L" stored_context=" +
+      PointerToString(snapshot.view_hwnd) + L" process=" +
+      snapshot.target.process_name + L" view_class=" +
+      snapshot.target.view_class + L" transitory=" +
+      std::to_wstring(snapshot.target.is_transitory ? 1 : 0) +
+      L" has_native_backend=" +
+      std::to_wstring(
+          HasVerifiedNativeReplacementBackend(snapshot.target) ? 1 : 0) +
+      L" stored_context=" +
       PointerToString(context_identity_) + L" stored_view_hwnd=" +
       PointerToString(view_hwnd_) + L" active=" +
       std::to_wstring(active_ ? 1 : 0) + L" last_preedit=\"" +
@@ -1379,6 +1486,28 @@ HRESULT TransitoryDirectTextComposition::Apply(
 #endif
   const bool update_only =
       commit_text.empty() && plan.has_preedit && !preedit_text.empty();
+
+#if defined(_DEBUG)
+  debug::DebugLog(
+      L"[MilkyWayIME][TransitoryDirectText][Apply][Decision] context=" +
+      PointerToString(context) + L" should_write=" +
+      std::to_wstring(should_write ? 1 : 0) + L" had_active_state=" +
+      std::to_wstring(had_active_state ? 1 : 0) + L" state_matches=" +
+      std::to_wstring(state_matches ? 1 : 0) + L" update_only=" +
+      std::to_wstring(update_only ? 1 : 0) + L" has_native_backend=" +
+      std::to_wstring(
+          HasVerifiedNativeReplacementBackend(snapshot.target) ? 1 : 0) +
+      L" can_win32_selection_fallback=" +
+      std::to_wstring(CanUseWin32SelectionReplacementForTransitoryDirectText(
+                          snapshot.target)
+                          ? 1
+                          : 0) +
+      L" can_richedit_range_fallback=" +
+      std::to_wstring(CanUseRichEditRangeReplacementForTransitoryDirectText(
+                          snapshot.target)
+                          ? 1
+                          : 0));
+#endif
 
   if (state_matches) {
     if (!deferred_autocomplete_update_ &&

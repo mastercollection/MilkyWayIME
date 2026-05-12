@@ -131,6 +131,13 @@ class WriteEditSession final : public ITfEditSession {
       const HRESULT direct_hr =
           host_->ApplyTransitoryDirectTextComposition(edit_cookie, context_,
                                                      operations_);
+#if defined(_DEBUG)
+      debug::DebugLog(
+          L"[MilkyWayIME][EditSession][TransitoryDirectTextResult] hr=0x" +
+          FormatHex(static_cast<std::uint32_t>(direct_hr)) +
+          L" fallback_to_tsf_plan=" +
+          std::to_wstring(direct_hr == S_FALSE ? 1 : 0));
+#endif
       if (direct_hr != S_FALSE) {
         return direct_hr;
       }
