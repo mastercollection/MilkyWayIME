@@ -109,6 +109,13 @@ RichEdit TOM range로 현재 selection을 이전 preedit 범위로 바꾸지 않
 RichEdit range를 검증하지 못한 경우에는 synthetic host `Backspace` fallback을 사용하지
 않습니다.
 
+호스트 텍스트 fallback 정책은 좁게 유지합니다. transitory host replacement backend로
+켜져 있는 경로는 `Edit`과 `RICHEDIT50W`의 native selection-aware replacement뿐입니다.
+FluentSearch/Avalonia `SearchTextBox`는 UIA whole-value replacement가 가능한 대상으로
+기록하지만, caret/preedit 의미를 보존하지 못하므로 런타임 UIA 쓰기는 비활성 상태로
+둡니다. WezTerm과 Unity/Nikke처럼 top-level window만 노출하는 대상은 generic UIA,
+native Edit, RichEdit fallback 선택에서 제외합니다.
+
 ## 커스텀 한글 자판
 
 커스텀 한글 자판은 MilkyWayIME JSON이 아니라 libhangul XML 형식을 기준으로 설계합니다.
