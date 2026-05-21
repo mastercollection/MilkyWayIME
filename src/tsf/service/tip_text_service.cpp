@@ -2,6 +2,7 @@
 
 #if defined(_WIN32)
 
+#include <UIAutomation.h>
 #include <imm.h>
 
 #include <cstdint>
@@ -26,6 +27,8 @@
 #include "tsf/settings/user_layout_paths.h"
 #include "tsf/settings/user_settings.h"
 
+#pragma comment(lib, "UIAutomationCore.lib")
+
 namespace milkyway::tsf::service {
 namespace {
 
@@ -39,6 +42,136 @@ void SafeRelease(T*& pointer) {
 
 bool KeyPressed(int virtual_key) {
   return (GetKeyState(virtual_key) & 0x8000) != 0;
+}
+
+std::wstring BstrToString(BSTR value) {
+  if (value == nullptr) {
+    return {};
+  }
+  return std::wstring(value, SysStringLen(value));
+}
+
+std::wstring UiaControlTypeName(int control_type) {
+  switch (control_type) {
+    case UIA_EditControlTypeId:
+      return L"Edit";
+    case UIA_DocumentControlTypeId:
+      return L"Document";
+    case UIA_WindowControlTypeId:
+      return L"Window";
+    case UIA_PaneControlTypeId:
+      return L"Pane";
+    case UIA_TextControlTypeId:
+      return L"Text";
+    default:
+      return std::to_wstring(control_type);
+  }
+}
+
+std::wstring UiaElementString(IUIAutomationElement* element,
+                              PROPERTYID property) {
+  if (element == nullptr) {
+    return {};
+  }
+  VARIANT value;
+  VariantInit(&value);
+  const HRESULT hr = element->GetCurrentPropertyValue(property, &value);
+  std::wstring text;
+  if (SUCCEEDED(hr) && value.vt == VT_BSTR) {
+    text = BstrToString(value.bstrVal);
+  }
+  VariantClear(&value);
+  return text;
+}
+
+bool UiaElementBool(IUIAutomationElement* element, PROPERTYID property) {
+  if (element == nullptr) {
+    return false;
+  }
+  VARIANT value;
+  VariantInit(&value);
+  const HRESULT hr = element->GetCurrentPropertyValue(property, &value);
+  bool result = false;
+  if (SUCCEEDED(hr) && value.vt == VT_BOOL) {
+    result = value.boolVal == VARIANT_TRUE;
+  }
+  VariantClear(&value);
+  return result;
+}
+
+HRESULT CaptureFocusedUiaTextTarget(
+    host::UiaFocusedTextTarget* target, std::wstring* current_value,
+    IUIAutomationValuePattern** value_pattern_out) {
+  if (target == nullptr || current_value == nullptr ||
+      value_pattern_out == nullptr) {
+    return E_INVALIDARG;
+  }
+  *target = {};
+  current_value->clear();
+  *value_pattern_out = nullptr;
+
+  IUIAutomation* automation = nullptr;
+  HRESULT hr = CoCreateInstance(CLSID_CUIAutomation, nullptr,
+                                CLSCTX_INPROC_SERVER,
+                                IID_PPV_ARGS(&automation));
+  if (FAILED(hr) || automation == nullptr) {
+    return hr;
+  }
+
+  IUIAutomationElement* focused = nullptr;
+  hr = automation->GetFocusedElement(&focused);
+  automation->Release();
+  if (FAILED(hr) || focused == nullptr) {
+    return hr;
+  }
+
+  target->framework_id =
+      UiaElementString(focused, UIA_FrameworkIdPropertyId);
+  target->automation_id =
+      UiaElementString(focused, UIA_AutomationIdPropertyId);
+  target->class_name = UiaElementString(focused, UIA_ClassNamePropertyId);
+  target->has_keyboard_focus =
+      UiaElementBool(focused, UIA_HasKeyboardFocusPropertyId);
+  target->is_keyboard_focusable =
+      UiaElementBool(focused, UIA_IsKeyboardFocusablePropertyId);
+  target->is_enabled = UiaElementBool(focused, UIA_IsEnabledPropertyId);
+
+  VARIANT control_type;
+  VariantInit(&control_type);
+  hr = focused->GetCurrentPropertyValue(UIA_ControlTypePropertyId,
+                                        &control_type);
+  if (SUCCEEDED(hr) && control_type.vt == VT_I4) {
+    target->control_type = UiaControlTypeName(control_type.lVal);
+  }
+  VariantClear(&control_type);
+
+  IUIAutomationValuePattern* value_pattern = nullptr;
+  hr = focused->GetCurrentPatternAs(UIA_ValuePatternId,
+                                    IID_PPV_ARGS(&value_pattern));
+  focused->Release();
+  if (FAILED(hr) || value_pattern == nullptr) {
+    return hr;
+  }
+
+  target->value_pattern_supported = true;
+  BOOL readonly = TRUE;
+  hr = value_pattern->get_CurrentIsReadOnly(&readonly);
+  if (FAILED(hr)) {
+    value_pattern->Release();
+    return hr;
+  }
+  target->value_readonly = readonly == TRUE;
+
+  BSTR value = nullptr;
+  hr = value_pattern->get_CurrentValue(&value);
+  if (FAILED(hr)) {
+    value_pattern->Release();
+    return hr;
+  }
+  *current_value = BstrToString(value);
+  SysFreeString(value);
+  *value_pattern_out = value_pattern;
+  return S_OK;
 }
 
 std::wstring FormatHex(std::uint32_t value);
@@ -1786,6 +1919,7 @@ STDMETHODIMP TipTextService::ActivateEx(ITfThreadMgr* thread_mgr,
     Deactivate();
     return hr;
   }
+  RefreshFocusedUiaTextTarget(L"ActivateEx");
 
   hr = AddInputModeLanguageBarItem();
   if (FAILED(hr)) {
@@ -1887,6 +2021,7 @@ STDMETHODIMP TipTextService::OnSetFocus(ITfDocumentMgr* focused,
 
   const HRESULT refresh_hr = RefreshFocusedContext(focused);
   if (SUCCEEDED(refresh_hr)) {
+    RefreshFocusedUiaTextTarget(L"OnSetFocus(DocumentMgr)");
     SyncLayoutSelectionFromSettings(L"OnSetFocus(DocumentMgr)");
   }
   return refresh_hr;
@@ -1901,6 +2036,7 @@ STDMETHODIMP TipTextService::OnPushContext(ITfContext* context) {
 #endif
   const HRESULT refresh_hr = RefreshFocusedContext();
   if (SUCCEEDED(refresh_hr)) {
+    RefreshFocusedUiaTextTarget(L"OnPushContext");
     SyncLayoutSelectionFromSettings(L"OnPushContext");
   }
   return refresh_hr;
@@ -1915,6 +2051,7 @@ STDMETHODIMP TipTextService::OnPopContext(ITfContext* context) {
 #endif
   const HRESULT refresh_hr = RefreshFocusedContext();
   if (SUCCEEDED(refresh_hr)) {
+    RefreshFocusedUiaTextTarget(L"OnPopContext");
     SyncLayoutSelectionFromSettings(L"OnPopContext");
   }
   return refresh_hr;
@@ -2584,6 +2721,96 @@ HRESULT TipTextService::ApplyTransitoryDirectTextComposition(
 void TipTextService::ResetTransitoryDirectTextComposition(
     const wchar_t* reason) {
   transitory_direct_text_.Reset(reason);
+  ResetUiaWholeValueComposition(reason);
+}
+
+HRESULT TipTextService::ApplyUiaWholeValueComposition(
+    const std::vector<edit::TextEditOperation>& operations) {
+  host::UiaFocusedTextTarget target;
+  std::wstring current_value;
+  IUIAutomationValuePattern* value_pattern = nullptr;
+  HRESULT hr = CaptureFocusedUiaTextTarget(&target, &current_value,
+                                           &value_pattern);
+  if (FAILED(hr) || value_pattern == nullptr) {
+    uia_whole_value_composition_.Reset();
+#if defined(_DEBUG)
+    debug::DebugLog(
+        L"[MilkyWayIME][UiaWholeValue][CaptureFailed] hr=0x" +
+        FormatHex(static_cast<std::uint32_t>(hr)));
+#endif
+    return S_FALSE;
+  }
+
+  focused_uia_text_target_ = target;
+  has_focused_uia_text_target_ = true;
+  if (host::SelectUiaTextBackendPolicy(target) !=
+      host::HostTextBackendPolicy::kUiaAvaloniaSearchBoxWholeValueReplace) {
+    value_pattern->Release();
+    uia_whole_value_composition_.Reset();
+    return S_FALSE;
+  }
+
+  std::wstring next_value;
+  if (!uia_whole_value_composition_.BuildNextValue(current_value, operations,
+                                                   &next_value)) {
+    value_pattern->Release();
+#if defined(_DEBUG)
+    debug::DebugLog(
+        L"[MilkyWayIME][UiaWholeValue][Skipped] reason=state_or_no_write");
+#endif
+    return S_FALSE;
+  }
+
+  BSTR value = SysAllocStringLen(next_value.data(),
+                                 static_cast<UINT>(next_value.size()));
+  if (value == nullptr && !next_value.empty()) {
+    value_pattern->Release();
+    uia_whole_value_composition_.Reset();
+    return E_OUTOFMEMORY;
+  }
+  hr = value_pattern->SetValue(value);
+  SysFreeString(value);
+  value_pattern->Release();
+
+#if defined(_DEBUG)
+  debug::DebugLog(
+      L"[MilkyWayIME][UiaWholeValue][SetValue] hr=0x" +
+      FormatHex(static_cast<std::uint32_t>(hr)) +
+      L" current_len=" + std::to_wstring(current_value.size()) +
+      L" next_len=" + std::to_wstring(next_value.size()) +
+      L" active=" +
+      std::to_wstring(uia_whole_value_composition_.IsActive() ? 1 : 0));
+#endif
+  if (FAILED(hr)) {
+    uia_whole_value_composition_.Reset();
+  }
+  return hr;
+}
+
+void TipTextService::ResetUiaWholeValueComposition(const wchar_t* reason) {
+  (void)reason;
+  uia_whole_value_composition_.Reset();
+  focused_uia_text_target_ = {};
+  has_focused_uia_text_target_ = false;
+}
+
+void TipTextService::RefreshFocusedUiaTextTarget(const wchar_t* reason) {
+  (void)reason;
+  host::UiaFocusedTextTarget target;
+  std::wstring current_value;
+  IUIAutomationValuePattern* value_pattern = nullptr;
+  const HRESULT hr = CaptureFocusedUiaTextTarget(&target, &current_value,
+                                                 &value_pattern);
+  if (value_pattern != nullptr) {
+    value_pattern->Release();
+  }
+  if (SUCCEEDED(hr)) {
+    focused_uia_text_target_ = target;
+    has_focused_uia_text_target_ = true;
+  } else {
+    focused_uia_text_target_ = {};
+    has_focused_uia_text_target_ = false;
+  }
 }
 
 void TipTextService::ResetTransitoryCompositionBridge(const wchar_t* reason) {
@@ -2597,25 +2824,24 @@ HRESULT TipTextService::CommitText(TfEditCookie edit_cookie, ITfContext* context
   }
 
   ITfInsertAtSelection* insert_at_selection = nullptr;
-  const HRESULT hr = context->QueryInterface(
+  HRESULT hr = context->QueryInterface(
       IID_ITfInsertAtSelection, reinterpret_cast<void**>(&insert_at_selection));
   if (FAILED(hr)) {
     return hr;
   }
 
   ITfRange* inserted_range = nullptr;
-  const HRESULT insert_hr = insert_at_selection->InsertTextAtSelection(
+  hr = insert_at_selection->InsertTextAtSelection(
       edit_cookie, 0, text.c_str(), static_cast<LONG>(text.size()),
       &inserted_range);
   insert_at_selection->Release();
-  if (FAILED(insert_hr)) {
-    return insert_hr;
+  if (FAILED(hr)) {
+    return hr;
   }
 
-  const HRESULT selection_hr =
-      MoveSelectionToRangeEnd(edit_cookie, context, inserted_range);
+  hr = MoveSelectionToRangeEnd(edit_cookie, context, inserted_range);
   inserted_range->Release();
-  return selection_hr;
+  return hr;
 }
 
 HRESULT TipTextService::StartComposition(TfEditCookie edit_cookie,
@@ -3288,7 +3514,6 @@ HRESULT TipTextService::FlushPendingOperations(ITfContext* context,
       policy == EditSessionRequestPolicy::kSyncPreferredWrite) {
     hr = edit_sink_.Flush(context, RequestFlagsForPolicy(policy, true));
   }
-
   if (FAILED(hr)) {
 #if defined(_DEBUG)
     debug::DebugLog(L"[MilkyWayIME][TipTextService::FlushPendingOperations][Failed] "

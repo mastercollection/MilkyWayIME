@@ -121,8 +121,19 @@ ContextTargetSnapshot CaptureTargetSnapshot(ITfContext* context) {
     if (SUCCEEDED(view->GetWnd(&hwnd))) {
       snapshot.view_hwnd = hwnd;
       snapshot.target.view_class = WindowClassName(hwnd);
+      snapshot.target.top_level_class = WindowClassName(GetAncestor(hwnd, GA_ROOT));
     }
     view->Release();
+  }
+
+  GUITHREADINFO gui_thread_info = {};
+  gui_thread_info.cbSize = sizeof(gui_thread_info);
+  if (GetGUIThreadInfo(0, &gui_thread_info)) {
+    snapshot.target.focus_class = WindowClassName(gui_thread_info.hwndFocus);
+    if (snapshot.target.top_level_class.empty()) {
+      snapshot.target.top_level_class =
+          WindowClassName(GetAncestor(gui_thread_info.hwndFocus, GA_ROOT));
+    }
   }
 
   return snapshot;
@@ -1643,9 +1654,7 @@ HRESULT TransitoryDirectTextComposition::Apply(
     // If a host-specific replacement path cannot verify the previous preedit,
     // synthetic Backspace is too likely to modify unrelated selected text.
     if (hr == S_FALSE && can_use_host_fallback &&
-        !CanUseWin32SelectionReplacementForTransitoryDirectText(
-            snapshot.target) &&
-        !CanUseRichEditRangeReplacementForTransitoryDirectText(
+        ShouldUseHostBackspaceReplacementForTransitoryDirectText(
             snapshot.target)) {
       hr = ReplacePreviousPreeditByHostBackspace(
           edit_cookie, context, snapshot.view_hwnd, last_preedit_,

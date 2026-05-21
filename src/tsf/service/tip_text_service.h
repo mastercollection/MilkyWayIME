@@ -27,6 +27,7 @@
 #include "tsf/edit/transitory_composition_bridge.h"
 #include "tsf/edit/transitory_direct_text_composition.h"
 #include "tsf/edit/tsf_text_edit_sink.h"
+#include "tsf/host/uia_text_policy.h"
 #include "tsf/candidate/candidate_list_ui.h"
 #include "tsf/service/text_service.h"
 
@@ -155,6 +156,9 @@ class TipTextService final : public ITfTextInputProcessorEx,
       TfEditCookie edit_cookie, ITfContext* context,
       const std::vector<edit::TextEditOperation>& operations);
   void ResetTransitoryDirectTextComposition(const wchar_t* reason);
+  HRESULT ApplyUiaWholeValueComposition(
+      const std::vector<edit::TextEditOperation>& operations);
+  void ResetUiaWholeValueComposition(const wchar_t* reason);
 
  private:
   HRESULT AdviseThreadMgrEventSink();
@@ -256,6 +260,7 @@ class TipTextService final : public ITfTextInputProcessorEx,
   HRESULT MoveSelectionToRangeEnd(TfEditCookie edit_cookie, ITfContext* context,
                                   ITfRange* range) const;
   void ResetTransitoryCompositionBridge(const wchar_t* reason);
+  void RefreshFocusedUiaTextTarget(const wchar_t* reason);
   HRESULT ClearCompositionDisplayAttribute(TfEditCookie edit_cookie,
                                            ITfContext* context) const;
   HRESULT ApplyCompositionDisplayAttribute(TfEditCookie edit_cookie,
@@ -287,6 +292,9 @@ class TipTextService final : public ITfTextInputProcessorEx,
   engine::session::InputSession session_;
   edit::TransitoryCompositionBridge transitory_composition_bridge_;
   edit::TransitoryDirectTextComposition transitory_direct_text_;
+  host::UiaWholeValueCompositionState uia_whole_value_composition_;
+  host::UiaFocusedTextTarget focused_uia_text_target_;
+  bool has_focused_uia_text_target_ = false;
   edit::TsfTextEditSink edit_sink_;
   TextService logic_;
   candidate::CandidateListUi* candidate_list_ = nullptr;

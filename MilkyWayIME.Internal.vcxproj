@@ -107,6 +107,8 @@
     <ClInclude Include="src\tsf\edit\transitory_composition_bridge.h" />
     <ClInclude Include="src\tsf\edit\transitory_direct_text_composition.h" />
     <ClInclude Include="src\tsf\edit\tsf_text_edit_sink.h" />
+    <ClInclude Include="src\tsf\host\host_text_policy.h" />
+    <ClInclude Include="src\tsf\host\uia_text_policy.h" />
     <ClInclude Include="src\tsf\langbar\input_mode_lang_bar_item.h" />
     <ClInclude Include="src\tsf\registration\text_service_registration.h" />
     <ClInclude Include="src\tsf\service\module_state.h" />

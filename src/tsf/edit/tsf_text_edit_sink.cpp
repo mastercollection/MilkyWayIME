@@ -143,6 +143,12 @@ class WriteEditSession final : public ITfEditSession {
       }
     }
 
+    const HRESULT uia_hr =
+        host_->ApplyUiaWholeValueComposition(operations_);
+    if (uia_hr != S_FALSE) {
+      return uia_hr;
+    }
+
     const std::vector<PlannedEditAction> plan =
         PlanTextEditActions(host_->HasTrackedTsfComposition(), operations_);
 
