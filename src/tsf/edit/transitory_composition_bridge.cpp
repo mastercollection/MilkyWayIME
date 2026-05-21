@@ -7,6 +7,7 @@
 #if defined(_DEBUG)
 #include "tsf/debug/debug_log.h"
 #endif
+#include "tsf/host/host_text_policy.h"
 
 namespace milkyway::tsf::edit {
 namespace {
@@ -34,7 +35,17 @@ std::wstring TargetDebugText(const TransitoryCompositionBridgeSnapshot& snapshot
 TransitoryCompositionBridgeTargetKind
 GetTransitoryCompositionBridgeTargetKind(
     const TransitoryCompositionBridgeTarget& target) {
-  if (target.is_transitory) {
+  milkyway::tsf::host::HostTextTarget host_target;
+  host_target.process_name = target.process_name;
+  host_target.view_class = target.view_class;
+  host_target.is_transitory = target.is_transitory;
+  const milkyway::tsf::host::HostTextBackendPolicy policy =
+      milkyway::tsf::host::SelectHostTextBackendPolicy(host_target);
+  if (target.is_transitory &&
+      (policy == milkyway::tsf::host::HostTextBackendPolicy::
+                     kNativeEditSelectionReplace ||
+       policy == milkyway::tsf::host::HostTextBackendPolicy::
+                     kNativeRichEditSelectionReplace)) {
     return TransitoryCompositionBridgeTargetKind::kSuppressEngineReset;
   }
   return TransitoryCompositionBridgeTargetKind::kNone;
@@ -43,7 +54,9 @@ GetTransitoryCompositionBridgeTargetKind(
 bool ShouldSuppressTransitoryCompositionEngineReset(
     const TransitoryCompositionBridgeSnapshot& snapshot) {
   return snapshot.context != nullptr && snapshot.internal_composing &&
-         snapshot.has_tracked_tsf_composition && snapshot.target.is_transitory;
+         snapshot.has_tracked_tsf_composition &&
+         GetTransitoryCompositionBridgeTargetKind(snapshot.target) ==
+             TransitoryCompositionBridgeTargetKind::kSuppressEngineReset;
 }
 
 bool TransitoryCompositionBridge::IsActive() const {

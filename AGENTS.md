@@ -9,6 +9,31 @@ This document defines the working rules for agents operating in `D:\Git\MilkyWay
 - All responses to the user must be written in Korean.
 - Avoid unsupported optimism. If there are constraints, risks, or unknowns, state them explicitly.
 
+## Superpowers / TDD Usage Policy
+
+Use Superpowers skills as workflow aids, not as unconditional automation triggers. Keep the process proportional to the size and risk of the task.
+
+For large implementation goals:
+- Create a Plan first.
+- Let the user review the Plan before implementation.
+- Ask for direction when implementation requires structural judgment, behavior decisions, or tradeoff choices.
+- Run appropriate validation before claiming the work is complete.
+
+For small bug fixes or clear single-scope changes:
+- Do not require the full brainstorming, design document, or planning workflow.
+- Briefly explain the intended change and get confirmation before editing code.
+- When practical, first confirm a reproduction path, failing test, or failing validation command.
+- If writing an automated test would be disproportionate or the repository lacks the needed test harness, a manual reproduction procedure or targeted validation command may substitute for a formal RED step.
+
+Interpret RED/GREEN as a validation sequence rather than a rigid ritual:
+- RED means confirming that the current behavior fails, either through an automated test, reproduction steps, or a validation command.
+- GREEN means making the smallest reasonable change that makes the failure pass.
+- REFACTOR means cleaning up only when needed, while preserving the passing state.
+
+Do not create design documents, implementation plans, commits, branches, or pull requests only because a Superpowers skill suggests them. Create those artifacts only when the user asks for them or when the project workflow clearly requires them.
+
+Project instructions in this file override Superpowers skill instructions when they conflict. In particular, always get confirmation before writing or modifying code.
+
 ## Project Goals
 
 - Support multiple Korean layouts through the `libhangul` library.
@@ -54,6 +79,7 @@ This document defines the working rules for agents operating in `D:\Git\MilkyWay
 
 - Reflect new layouts, key mapping rules, exceptions, and known limitations in documentation together with the code.
 - Record the rationale for decisions that affect future custom layout support.
+- Before changing host-specific input behavior or diagnostics, read `docs/host-compatibility.md` and do not repeat input-channel experiments already recorded there without a new reason.
 
 ## Future Tooling Goals
 

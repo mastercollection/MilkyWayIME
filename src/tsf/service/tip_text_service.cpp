@@ -2,6 +2,7 @@
 
 #if defined(_WIN32)
 
+#include <UIAutomation.h>
 #include <imm.h>
 
 #include <cstdint>
@@ -21,10 +22,13 @@
 #if defined(_DEBUG)
 #include "tsf/debug/debug_log.h"
 #endif
+#include "tsf/diagnostics/host_diagnostics.h"
 #include "tsf/registration/text_service_registration.h"
 #include "tsf/service/module_state.h"
 #include "tsf/settings/user_layout_paths.h"
 #include "tsf/settings/user_settings.h"
+
+#pragma comment(lib, "UIAutomationCore.lib")
 
 namespace milkyway::tsf::service {
 namespace {
@@ -39,6 +43,136 @@ void SafeRelease(T*& pointer) {
 
 bool KeyPressed(int virtual_key) {
   return (GetKeyState(virtual_key) & 0x8000) != 0;
+}
+
+std::wstring BstrToString(BSTR value) {
+  if (value == nullptr) {
+    return {};
+  }
+  return std::wstring(value, SysStringLen(value));
+}
+
+std::wstring UiaControlTypeName(int control_type) {
+  switch (control_type) {
+    case UIA_EditControlTypeId:
+      return L"Edit";
+    case UIA_DocumentControlTypeId:
+      return L"Document";
+    case UIA_WindowControlTypeId:
+      return L"Window";
+    case UIA_PaneControlTypeId:
+      return L"Pane";
+    case UIA_TextControlTypeId:
+      return L"Text";
+    default:
+      return std::to_wstring(control_type);
+  }
+}
+
+std::wstring UiaElementString(IUIAutomationElement* element,
+                              PROPERTYID property) {
+  if (element == nullptr) {
+    return {};
+  }
+  VARIANT value;
+  VariantInit(&value);
+  const HRESULT hr = element->GetCurrentPropertyValue(property, &value);
+  std::wstring text;
+  if (SUCCEEDED(hr) && value.vt == VT_BSTR) {
+    text = BstrToString(value.bstrVal);
+  }
+  VariantClear(&value);
+  return text;
+}
+
+bool UiaElementBool(IUIAutomationElement* element, PROPERTYID property) {
+  if (element == nullptr) {
+    return false;
+  }
+  VARIANT value;
+  VariantInit(&value);
+  const HRESULT hr = element->GetCurrentPropertyValue(property, &value);
+  bool result = false;
+  if (SUCCEEDED(hr) && value.vt == VT_BOOL) {
+    result = value.boolVal == VARIANT_TRUE;
+  }
+  VariantClear(&value);
+  return result;
+}
+
+HRESULT CaptureFocusedUiaTextTarget(
+    host::UiaFocusedTextTarget* target, std::wstring* current_value,
+    IUIAutomationValuePattern** value_pattern_out) {
+  if (target == nullptr || current_value == nullptr ||
+      value_pattern_out == nullptr) {
+    return E_INVALIDARG;
+  }
+  *target = {};
+  current_value->clear();
+  *value_pattern_out = nullptr;
+
+  IUIAutomation* automation = nullptr;
+  HRESULT hr = CoCreateInstance(CLSID_CUIAutomation, nullptr,
+                                CLSCTX_INPROC_SERVER,
+                                IID_PPV_ARGS(&automation));
+  if (FAILED(hr) || automation == nullptr) {
+    return hr;
+  }
+
+  IUIAutomationElement* focused = nullptr;
+  hr = automation->GetFocusedElement(&focused);
+  automation->Release();
+  if (FAILED(hr) || focused == nullptr) {
+    return hr;
+  }
+
+  target->framework_id =
+      UiaElementString(focused, UIA_FrameworkIdPropertyId);
+  target->automation_id =
+      UiaElementString(focused, UIA_AutomationIdPropertyId);
+  target->class_name = UiaElementString(focused, UIA_ClassNamePropertyId);
+  target->has_keyboard_focus =
+      UiaElementBool(focused, UIA_HasKeyboardFocusPropertyId);
+  target->is_keyboard_focusable =
+      UiaElementBool(focused, UIA_IsKeyboardFocusablePropertyId);
+  target->is_enabled = UiaElementBool(focused, UIA_IsEnabledPropertyId);
+
+  VARIANT control_type;
+  VariantInit(&control_type);
+  hr = focused->GetCurrentPropertyValue(UIA_ControlTypePropertyId,
+                                        &control_type);
+  if (SUCCEEDED(hr) && control_type.vt == VT_I4) {
+    target->control_type = UiaControlTypeName(control_type.lVal);
+  }
+  VariantClear(&control_type);
+
+  IUIAutomationValuePattern* value_pattern = nullptr;
+  hr = focused->GetCurrentPatternAs(UIA_ValuePatternId,
+                                    IID_PPV_ARGS(&value_pattern));
+  focused->Release();
+  if (FAILED(hr) || value_pattern == nullptr) {
+    return hr;
+  }
+
+  target->value_pattern_supported = true;
+  BOOL readonly = TRUE;
+  hr = value_pattern->get_CurrentIsReadOnly(&readonly);
+  if (FAILED(hr)) {
+    value_pattern->Release();
+    return hr;
+  }
+  target->value_readonly = readonly == TRUE;
+
+  BSTR value = nullptr;
+  hr = value_pattern->get_CurrentValue(&value);
+  if (FAILED(hr)) {
+    value_pattern->Release();
+    return hr;
+  }
+  *current_value = BstrToString(value);
+  SysFreeString(value);
+  *value_pattern_out = value_pattern;
+  return S_OK;
 }
 
 std::wstring FormatHex(std::uint32_t value);
@@ -1686,6 +1820,7 @@ STDMETHODIMP TipTextService::Activate(ITfThreadMgr* thread_mgr,
 STDMETHODIMP TipTextService::ActivateEx(ITfThreadMgr* thread_mgr,
                                         TfClientId client_id, DWORD flags) {
 #if defined(_DEBUG)
+  diagnostics_activation_observed_ = true;
   debug::DebugLog(L"[MilkyWayIME][ActivateEx][Begin] process=" +
                   CurrentProcessName() + L" pid=" +
                   std::to_wstring(GetCurrentProcessId()) + L" tid=" +
@@ -1698,6 +1833,9 @@ STDMETHODIMP TipTextService::ActivateEx(ITfThreadMgr* thread_mgr,
                   L" comless=" +
                   std::to_wstring((flags & TF_TMAE_COMLESS) ? 1 : 0) +
                   L" " + ForegroundWindowDiagnostics());
+  diagnostics::LogHostSnapshot(
+      L"ActivateEx.Begin",
+      diagnostics::CaptureHostSnapshot(thread_mgr, nullptr, nullptr));
 #endif
   if (thread_mgr == nullptr) {
     return E_INVALIDARG;
@@ -1786,6 +1924,7 @@ STDMETHODIMP TipTextService::ActivateEx(ITfThreadMgr* thread_mgr,
     Deactivate();
     return hr;
   }
+  RefreshFocusedUiaTextTarget(L"ActivateEx");
 
   hr = AddInputModeLanguageBarItem();
   if (FAILED(hr)) {
@@ -1799,6 +1938,7 @@ STDMETHODIMP TipTextService::ActivateEx(ITfThreadMgr* thread_mgr,
 
   SetImeOpen(true);
 #if defined(_DEBUG)
+  LogDiagnosticsSnapshot(L"ActivateEx.End", nullptr, text_edit_sink_context_);
   debug::DebugLog(L"[MilkyWayIME][ActivateEx][End] process=" +
                   CurrentProcessName() + L" thread_mgr=" +
                   PointerToString(thread_mgr_) + L" text_context=" +
@@ -1849,6 +1989,10 @@ STDMETHODIMP TipTextService::Deactivate() {
   composing_display_attribute_atom_ = TF_INVALID_GUIDATOM;
   deactivating_ = false;
 #if defined(_DEBUG)
+  diagnostics_current_key_path_id_ = 0;
+  diagnostics::SetCurrentKeyPathId(0);
+#endif
+#if defined(_DEBUG)
   debug::DebugLog(L"[MilkyWayIME][Deactivate][End]");
 #endif
   return S_OK;
@@ -1865,6 +2009,7 @@ STDMETHODIMP TipTextService::OnUninitDocumentMgr(ITfDocumentMgr*) {
 STDMETHODIMP TipTextService::OnSetFocus(ITfDocumentMgr* focused,
                                         ITfDocumentMgr* previous) {
 #if defined(_DEBUG)
+  LogDiagnosticsSnapshot(L"OnSetFocus.DocumentMgr.Begin", focused, nullptr);
   debug::DebugLog(L"[MilkyWayIME][OnSetFocus(DocumentMgr)] process=" +
                   CurrentProcessName() + L" focused=" +
                   PointerToString(focused) + L" previous=" +
@@ -1887,13 +2032,19 @@ STDMETHODIMP TipTextService::OnSetFocus(ITfDocumentMgr* focused,
 
   const HRESULT refresh_hr = RefreshFocusedContext(focused);
   if (SUCCEEDED(refresh_hr)) {
+    RefreshFocusedUiaTextTarget(L"OnSetFocus(DocumentMgr)");
     SyncLayoutSelectionFromSettings(L"OnSetFocus(DocumentMgr)");
   }
+#if defined(_DEBUG)
+  LogDiagnosticsSnapshot(L"OnSetFocus.DocumentMgr.End", focused,
+                         text_edit_sink_context_);
+#endif
   return refresh_hr;
 }
 
 STDMETHODIMP TipTextService::OnPushContext(ITfContext* context) {
 #if defined(_DEBUG)
+  LogDiagnosticsSnapshot(L"OnPushContext", nullptr, context);
   debug::DebugLog(L"[MilkyWayIME][OnPushContext] context=" +
                   PointerToString(context) + L" " +
                   ContextDiagnostics(context) + L" " +
@@ -1901,6 +2052,7 @@ STDMETHODIMP TipTextService::OnPushContext(ITfContext* context) {
 #endif
   const HRESULT refresh_hr = RefreshFocusedContext();
   if (SUCCEEDED(refresh_hr)) {
+    RefreshFocusedUiaTextTarget(L"OnPushContext");
     SyncLayoutSelectionFromSettings(L"OnPushContext");
   }
   return refresh_hr;
@@ -1915,6 +2067,7 @@ STDMETHODIMP TipTextService::OnPopContext(ITfContext* context) {
 #endif
   const HRESULT refresh_hr = RefreshFocusedContext();
   if (SUCCEEDED(refresh_hr)) {
+    RefreshFocusedUiaTextTarget(L"OnPopContext");
     SyncLayoutSelectionFromSettings(L"OnPopContext");
   }
   return refresh_hr;
@@ -1975,6 +2128,11 @@ STDMETHODIMP TipTextService::OnTestKeyDown(ITfContext* context, WPARAM wparam,
       wparam, lparam, modifiers, engine::key::KeyTransition::kPressed);
 
 #if defined(_DEBUG)
+  diagnostics_current_key_path_id_ = ++diagnostics_next_key_path_id_;
+  diagnostics::SetCurrentKeyPathId(diagnostics_current_key_path_id_);
+  test_key_down_snapshot_ = CaptureDiagnosticsSnapshot(nullptr, context);
+  has_test_key_down_snapshot_ = true;
+  diagnostics::LogHostSnapshot(L"OnTestKeyDown", test_key_down_snapshot_);
   debug::DebugLog(
       L"[MilkyWayIME][OnTestKeyDown] vk=0x" +
       std::to_wstring(static_cast<std::uint16_t>(wparam)) + L" context=" +
@@ -2051,6 +2209,12 @@ STDMETHODIMP TipTextService::OnKeyDown(ITfContext* context, WPARAM wparam,
 
   *eaten = FALSE;
   const engine::state::ModifierState modifiers = QueryModifierState();
+#if defined(_DEBUG)
+  diagnostics::SetCurrentKeyPathId(diagnostics_current_key_path_id_);
+  key_down_snapshot_ = CaptureDiagnosticsSnapshot(nullptr, context);
+  has_key_down_snapshot_ = true;
+  diagnostics::LogHostSnapshot(L"OnKeyDown.Begin", key_down_snapshot_);
+#endif
   if (IsImeModeToggleVirtualKey(wparam)) {
 #if defined(_DEBUG)
     debug::DebugLog(L"[MilkyWayIME][OnKeyDown][VK_HANGUL] context=" +
@@ -2200,10 +2364,21 @@ STDMETHODIMP TipTextService::OnKeyDown(ITfContext* context, WPARAM wparam,
   if (edit_sink_.HasPendingOperations()) {
     const HRESULT hr = FlushPendingOperations(
         context, EditSessionRequestPolicy::kKeyPathWrite, L"OnKeyDown");
+#if defined(_DEBUG)
+    ClassifyHostDiagnostics(L"OnKeyDown.AfterFlush",
+                            CaptureDiagnosticsSnapshot(nullptr, context), hr,
+                            false);
+#endif
     if (FAILED(hr)) {
       SyncCompositionTermination();
       return S_OK;
     }
+  } else {
+#if defined(_DEBUG)
+    ClassifyHostDiagnostics(L"OnKeyDown.NoWrite",
+                            CaptureDiagnosticsSnapshot(nullptr, context), S_OK,
+                            false);
+#endif
   }
   if (reset_transitory_direct_after_flush) {
     ResetTransitoryDirectTextComposition(L"OnKeyDownCompositionEnded");
@@ -2292,6 +2467,13 @@ STDMETHODIMP TipTextService::OnCompositionTerminated(TfEditCookie edit_cookie,
   const bool should_reset_engine =
       !suppress_engine_reset && (tracked || session_.IsComposing());
 #if defined(_DEBUG)
+  diagnostics::SetCurrentKeyPathId(diagnostics_current_key_path_id_);
+  const bool external_empty_termination =
+      tracked && session_.IsComposing() && session_.snapshot().preedit.empty();
+  ClassifyHostDiagnostics(L"OnCompositionTerminated",
+                          CaptureDiagnosticsSnapshot(nullptr,
+                                                     termination_context),
+                          S_OK, external_empty_termination);
   debug::DebugLog(
       L"[MilkyWayIME][OnCompositionTerminated][Begin] process=" +
       CurrentProcessName() + L" edit_cookie=0x" +
@@ -2584,6 +2766,96 @@ HRESULT TipTextService::ApplyTransitoryDirectTextComposition(
 void TipTextService::ResetTransitoryDirectTextComposition(
     const wchar_t* reason) {
   transitory_direct_text_.Reset(reason);
+  ResetUiaWholeValueComposition(reason);
+}
+
+HRESULT TipTextService::ApplyUiaWholeValueComposition(
+    const std::vector<edit::TextEditOperation>& operations) {
+  host::UiaFocusedTextTarget target;
+  std::wstring current_value;
+  IUIAutomationValuePattern* value_pattern = nullptr;
+  HRESULT hr = CaptureFocusedUiaTextTarget(&target, &current_value,
+                                           &value_pattern);
+  if (FAILED(hr) || value_pattern == nullptr) {
+    uia_whole_value_composition_.Reset();
+#if defined(_DEBUG)
+    debug::DebugLog(
+        L"[MilkyWayIME][UiaWholeValue][CaptureFailed] hr=0x" +
+        FormatHex(static_cast<std::uint32_t>(hr)));
+#endif
+    return S_FALSE;
+  }
+
+  focused_uia_text_target_ = target;
+  has_focused_uia_text_target_ = true;
+  if (host::SelectUiaTextBackendPolicy(target) !=
+      host::HostTextBackendPolicy::kUiaAvaloniaSearchBoxWholeValueReplace) {
+    value_pattern->Release();
+    uia_whole_value_composition_.Reset();
+    return S_FALSE;
+  }
+
+  std::wstring next_value;
+  if (!uia_whole_value_composition_.BuildNextValue(current_value, operations,
+                                                   &next_value)) {
+    value_pattern->Release();
+#if defined(_DEBUG)
+    debug::DebugLog(
+        L"[MilkyWayIME][UiaWholeValue][Skipped] reason=state_or_no_write");
+#endif
+    return S_FALSE;
+  }
+
+  BSTR value = SysAllocStringLen(next_value.data(),
+                                 static_cast<UINT>(next_value.size()));
+  if (value == nullptr && !next_value.empty()) {
+    value_pattern->Release();
+    uia_whole_value_composition_.Reset();
+    return E_OUTOFMEMORY;
+  }
+  hr = value_pattern->SetValue(value);
+  SysFreeString(value);
+  value_pattern->Release();
+
+#if defined(_DEBUG)
+  debug::DebugLog(
+      L"[MilkyWayIME][UiaWholeValue][SetValue] hr=0x" +
+      FormatHex(static_cast<std::uint32_t>(hr)) +
+      L" current_len=" + std::to_wstring(current_value.size()) +
+      L" next_len=" + std::to_wstring(next_value.size()) +
+      L" active=" +
+      std::to_wstring(uia_whole_value_composition_.IsActive() ? 1 : 0));
+#endif
+  if (FAILED(hr)) {
+    uia_whole_value_composition_.Reset();
+  }
+  return hr;
+}
+
+void TipTextService::ResetUiaWholeValueComposition(const wchar_t* reason) {
+  (void)reason;
+  uia_whole_value_composition_.Reset();
+  focused_uia_text_target_ = {};
+  has_focused_uia_text_target_ = false;
+}
+
+void TipTextService::RefreshFocusedUiaTextTarget(const wchar_t* reason) {
+  (void)reason;
+  host::UiaFocusedTextTarget target;
+  std::wstring current_value;
+  IUIAutomationValuePattern* value_pattern = nullptr;
+  const HRESULT hr = CaptureFocusedUiaTextTarget(&target, &current_value,
+                                                 &value_pattern);
+  if (value_pattern != nullptr) {
+    value_pattern->Release();
+  }
+  if (SUCCEEDED(hr)) {
+    focused_uia_text_target_ = target;
+    has_focused_uia_text_target_ = true;
+  } else {
+    focused_uia_text_target_ = {};
+    has_focused_uia_text_target_ = false;
+  }
 }
 
 void TipTextService::ResetTransitoryCompositionBridge(const wchar_t* reason) {
@@ -2593,29 +2865,42 @@ void TipTextService::ResetTransitoryCompositionBridge(const wchar_t* reason) {
 HRESULT TipTextService::CommitText(TfEditCookie edit_cookie, ITfContext* context,
                                    const std::wstring& text) {
   if (context == nullptr || text.empty()) {
+#if defined(_DEBUG)
+    diagnostics::LogWriteProbe(L"CommitText.Skipped", text.size(), S_OK);
+#endif
     return S_OK;
   }
 
   ITfInsertAtSelection* insert_at_selection = nullptr;
-  const HRESULT hr = context->QueryInterface(
+  HRESULT hr = context->QueryInterface(
       IID_ITfInsertAtSelection, reinterpret_cast<void**>(&insert_at_selection));
   if (FAILED(hr)) {
+#if defined(_DEBUG)
+    diagnostics::LogWriteProbe(L"CommitText.QueryInsertAtSelection", text.size(),
+                               hr);
+#endif
     return hr;
   }
 
   ITfRange* inserted_range = nullptr;
-  const HRESULT insert_hr = insert_at_selection->InsertTextAtSelection(
+  hr = insert_at_selection->InsertTextAtSelection(
       edit_cookie, 0, text.c_str(), static_cast<LONG>(text.size()),
       &inserted_range);
   insert_at_selection->Release();
-  if (FAILED(insert_hr)) {
-    return insert_hr;
+  if (FAILED(hr)) {
+#if defined(_DEBUG)
+    diagnostics::LogWriteProbe(L"CommitText.InsertTextAtSelection", text.size(),
+                               hr);
+#endif
+    return hr;
   }
 
-  const HRESULT selection_hr =
-      MoveSelectionToRangeEnd(edit_cookie, context, inserted_range);
+  hr = MoveSelectionToRangeEnd(edit_cookie, context, inserted_range);
   inserted_range->Release();
-  return selection_hr;
+#if defined(_DEBUG)
+  diagnostics::LogWriteProbe(L"CommitText.End", text.size(), hr);
+#endif
+  return hr;
 }
 
 HRESULT TipTextService::StartComposition(TfEditCookie edit_cookie,
@@ -2705,6 +2990,7 @@ HRESULT TipTextService::StartComposition(TfEditCookie edit_cookie,
 
 Exit:
 #if defined(_DEBUG)
+  diagnostics::LogWriteProbe(L"StartComposition.End", text.size(), hr);
   const edit::TransitoryCompositionBridgeSnapshot bridge_snapshot_end =
       CaptureTransitoryBridgeSnapshot(context, session_.IsComposing(),
                                       composition_ != nullptr, text);
@@ -2729,6 +3015,8 @@ HRESULT TipTextService::UpdateComposition(TfEditCookie edit_cookie,
                                           const std::wstring& text) {
   if (composition_ == nullptr) {
 #if defined(_DEBUG)
+    diagnostics::LogWriteProbe(L"UpdateComposition.NoTrackedComposition",
+                               text.size(), E_UNEXPECTED);
     debug::DebugLog(
         L"[MilkyWayIME][UpdateComposition][NoTrackedComposition] text=\"" +
         text + L"\" session_composing=" +
@@ -2776,6 +3064,7 @@ HRESULT TipTextService::UpdateComposition(TfEditCookie edit_cookie,
 
   composition_range->Release();
 #if defined(_DEBUG)
+  diagnostics::LogWriteProbe(L"UpdateComposition.End", text.size(), hr);
   debug::DebugLog(
       L"[MilkyWayIME][UpdateComposition][End] hr=0x" +
       FormatHex(static_cast<std::uint32_t>(hr)) + L" session_composing=" +
@@ -2788,6 +3077,8 @@ HRESULT TipTextService::UpdateComposition(TfEditCookie edit_cookie,
 HRESULT TipTextService::CompleteComposition(TfEditCookie edit_cookie) {
   if (composition_ == nullptr) {
 #if defined(_DEBUG)
+    diagnostics::LogWriteProbe(L"CompleteComposition.NoTrackedComposition", 0,
+                               S_FALSE);
     debug::DebugLog(L"[MilkyWayIME][CompleteComposition][NoTrackedComposition] "
                     L"session_composing=" +
                     std::to_wstring(session_.IsComposing() ? 1 : 0));
@@ -2811,6 +3102,7 @@ HRESULT TipTextService::CompleteComposition(TfEditCookie edit_cookie) {
   const HRESULT hr = composition->EndComposition(edit_cookie);
   composition->Release();
 #if defined(_DEBUG)
+  diagnostics::LogWriteProbe(L"CompleteComposition.End", 0, hr);
   debug::DebugLog(
       L"[MilkyWayIME][CompleteComposition][End] hr=0x" +
       FormatHex(static_cast<std::uint32_t>(hr)) + L" session_composing=" +
@@ -3175,6 +3467,7 @@ HRESULT TipTextService::RefreshFocusedContext(ITfDocumentMgr* document_mgr) {
 HRESULT TipTextService::AttachTextEditSink(ITfContext* context) {
   if (context == text_edit_sink_context_) {
 #if defined(_DEBUG)
+    LogDiagnosticsSnapshot(L"AttachTextEditSink.Reuse", nullptr, context);
     debug::DebugLog(L"[MilkyWayIME][AttachTextEditSink][Reuse] context=" +
                     PointerToString(context));
 #endif
@@ -3184,6 +3477,7 @@ HRESULT TipTextService::AttachTextEditSink(ITfContext* context) {
   DetachTextEditSink();
   if (context == nullptr) {
 #if defined(_DEBUG)
+    LogDiagnosticsSnapshot(L"AttachTextEditSink.NullContext", nullptr, context);
     debug::DebugLog(L"[MilkyWayIME][AttachTextEditSink][NullContext]");
 #endif
     return S_OK;
@@ -3202,6 +3496,8 @@ HRESULT TipTextService::AttachTextEditSink(ITfContext* context) {
   source->Release();
   if (FAILED(advise_hr)) {
 #if defined(_DEBUG)
+    LogDiagnosticsSnapshot(L"AttachTextEditSink.AdviseFailed", nullptr,
+                           context);
     debug::DebugLog(L"[MilkyWayIME][AttachTextEditSink][AdviseFailed] context=" +
                     PointerToString(context) + L" hr=0x" +
                     FormatHex(static_cast<std::uint32_t>(advise_hr)));
@@ -3212,6 +3508,8 @@ HRESULT TipTextService::AttachTextEditSink(ITfContext* context) {
   text_edit_sink_context_ = context;
   text_edit_sink_context_->AddRef();
 #if defined(_DEBUG)
+  LogDiagnosticsSnapshot(L"AttachTextEditSink.Attached", nullptr,
+                         text_edit_sink_context_);
   debug::DebugLog(L"[MilkyWayIME][AttachTextEditSink][Attached] context=" +
                   PointerToString(text_edit_sink_context_) + L" cookie=" +
                   std::to_wstring(text_edit_sink_cookie_));
@@ -3283,11 +3581,21 @@ HRESULT TipTextService::FlushPendingOperations(ITfContext* context,
                                                EditSessionRequestPolicy policy,
                                                const wchar_t* origin) {
   const DWORD request_flags = RequestFlagsForPolicy(policy);
+#if defined(_DEBUG)
+  LogDiagnosticsSnapshot(L"FlushPendingOperations.Begin", nullptr, context);
+#endif
   HRESULT hr = edit_sink_.Flush(context, request_flags);
   if (FAILED(hr) && ShouldRetryAsync(hr) &&
       policy == EditSessionRequestPolicy::kSyncPreferredWrite) {
     hr = edit_sink_.Flush(context, RequestFlagsForPolicy(policy, true));
   }
+#if defined(_DEBUG)
+  diagnostics::LogWriteProbe(origin != nullptr ? origin : L"FlushPendingOperations",
+                             0, hr);
+  ClassifyHostDiagnostics(L"FlushPendingOperations.End",
+                          CaptureDiagnosticsSnapshot(nullptr, context), hr,
+                          false);
+#endif
 
   if (FAILED(hr)) {
 #if defined(_DEBUG)
@@ -4582,6 +4890,43 @@ void TipTextService::SyncCompositionTermination() {
 void TipTextService::ClearPendingKeyResult() {
   pending_key_result_ = {};
 }
+
+#if defined(_DEBUG)
+
+diagnostics::HostSnapshot TipTextService::CaptureDiagnosticsSnapshot(
+    ITfDocumentMgr* document_mgr, ITfContext* context) const {
+  return diagnostics::CaptureHostSnapshot(thread_mgr_, document_mgr, context);
+}
+
+void TipTextService::LogDiagnosticsSnapshot(const wchar_t* stage,
+                                            ITfDocumentMgr* document_mgr,
+                                            ITfContext* context) const {
+  diagnostics::LogHostSnapshot(stage,
+                               CaptureDiagnosticsSnapshot(document_mgr,
+                                                          context));
+}
+
+void TipTextService::ClassifyHostDiagnostics(
+    const wchar_t* stage, const diagnostics::HostSnapshot& end_snapshot,
+    HRESULT write_hr, bool external_empty_termination) const {
+  std::vector<diagnostics::HostSnapshot> snapshots;
+  snapshots.reserve(3);
+  if (has_test_key_down_snapshot_) {
+    snapshots.push_back(test_key_down_snapshot_);
+  }
+  if (has_key_down_snapshot_) {
+    snapshots.push_back(key_down_snapshot_);
+  }
+  snapshots.push_back(end_snapshot);
+
+  const diagnostics::HostClassification classification =
+      diagnostics::ClassifyHost(snapshots, diagnostics_activation_observed_,
+                                external_empty_termination, write_hr);
+  diagnostics::LogHostSnapshot(stage, end_snapshot);
+  diagnostics::LogHostClassification(stage, classification, write_hr);
+}
+
+#endif
 
 }  // namespace milkyway::tsf::service
 

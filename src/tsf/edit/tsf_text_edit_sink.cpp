@@ -11,6 +11,7 @@
 
 #if defined(_DEBUG)
 #include "tsf/debug/debug_log.h"
+#include "tsf/diagnostics/host_diagnostics.h"
 #endif
 #include "tsf/edit/text_edit_plan.h"
 #include "tsf/service/tip_text_service.h"
@@ -83,6 +84,30 @@ const wchar_t* PlannedActionTypeName(PlannedEditActionType type) {
   return L"Unknown";
 }
 
+std::wstring JoinOperationTypes(
+    const std::vector<TextEditOperation>& operations) {
+  std::wstring joined;
+  for (const TextEditOperation& operation : operations) {
+    if (!joined.empty()) {
+      joined += L",";
+    }
+    joined += OperationTypeName(operation.type);
+  }
+  return joined;
+}
+
+std::wstring JoinPlannedActionTypes(
+    const std::vector<PlannedEditAction>& actions) {
+  std::wstring joined;
+  for (const PlannedEditAction& action : actions) {
+    if (!joined.empty()) {
+      joined += L",";
+    }
+    joined += PlannedActionTypeName(action.type);
+  }
+  return joined;
+}
+
 #endif
 
 class WriteEditSession final : public ITfEditSession {
@@ -141,6 +166,12 @@ class WriteEditSession final : public ITfEditSession {
       if (direct_hr != S_FALSE) {
         return direct_hr;
       }
+    }
+
+    const HRESULT uia_hr =
+        host_->ApplyUiaWholeValueComposition(operations_);
+    if (uia_hr != S_FALSE) {
+      return uia_hr;
     }
 
     const std::vector<PlannedEditAction> plan =
@@ -202,11 +233,24 @@ HRESULT RequestWriteEditSession(service::TipTextService* host,
                                 ITfContext* context,
                                 std::vector<TextEditOperation> operations,
                                 DWORD request_flags, bool* flushing,
-                                HRESULT* session_hr) {
+                                HRESULT* session_hr,
+                                bool used_resolved_context) {
   if (host == nullptr || context == nullptr || flushing == nullptr ||
       session_hr == nullptr) {
     return E_INVALIDARG;
   }
+
+#if defined(_DEBUG)
+  std::size_t total_text_length = 0;
+  for (const TextEditOperation& operation : operations) {
+    total_text_length += Utf8ToWide(operation.text).size();
+  }
+  const std::wstring operation_types = JoinOperationTypes(operations);
+  const std::vector<PlannedEditAction> planned_actions =
+      PlanTextEditActions(host->HasTrackedTsfComposition(), operations);
+  const std::wstring planned_action_types =
+      JoinPlannedActionTypes(planned_actions);
+#endif
 
   WriteEditSession* edit_session =
       new (std::nothrow) WriteEditSession(host, context, std::move(operations));
@@ -219,6 +263,14 @@ HRESULT RequestWriteEditSession(service::TipTextService* host,
   const HRESULT hr = context->RequestEditSession(
       host->client_id(), edit_session, request_flags, session_hr);
   *flushing = false;
+#if defined(_DEBUG)
+  diagnostics::LogWriteProbe(L"RequestEditSession", total_text_length,
+                             FAILED(hr) ? hr : *session_hr);
+  diagnostics::LogWriteProbeEx(
+      L"RequestEditSession", total_text_length, hr, *session_hr, request_flags,
+      operation_types.c_str(), planned_action_types.c_str(),
+      used_resolved_context);
+#endif
 
   edit_session->Release();
   return hr;
@@ -289,7 +341,8 @@ HRESULT TsfTextEditSink::Flush(ITfContext* context, DWORD request_flags) {
   HRESULT session_hr = E_FAIL;
   HRESULT hr = RequestWriteEditSession(host_, request_context,
                                        std::move(operations), request_flags,
-                                       &flushing_, &session_hr);
+                                       &flushing_, &session_hr,
+                                       used_resolved_context);
 
   if (FAILED(hr) && used_resolved_context) {
 #if defined(_DEBUG)
@@ -309,7 +362,7 @@ HRESULT TsfTextEditSink::Flush(ITfContext* context, DWORD request_flags) {
     session_hr = E_FAIL;
     hr = RequestWriteEditSession(host_, request_context,
                                  std::move(fallback_operations), request_flags,
-                                 &flushing_, &session_hr);
+                                 &flushing_, &session_hr, false);
   }
 
   request_context->Release();

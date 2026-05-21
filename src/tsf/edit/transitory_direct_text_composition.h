@@ -10,15 +10,26 @@
 #include <msctf.h>
 
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "tsf/edit/text_edit_sink.h"
+#include "tsf/host/host_text_policy.h"
 
 namespace milkyway::tsf::edit {
 
 struct TransitoryDirectTextTarget {
+  TransitoryDirectTextTarget() = default;
+  TransitoryDirectTextTarget(std::wstring process, std::wstring view,
+                             bool transitory)
+      : process_name(std::move(process)),
+        view_class(std::move(view)),
+        is_transitory(transitory) {}
+
   std::wstring process_name;
   std::wstring view_class;
+  std::wstring focus_class;
+  std::wstring top_level_class;
   bool is_transitory = false;
 };
 
@@ -59,18 +70,48 @@ inline bool IsTransitoryDirectTextTarget(
 
 inline bool CanUseWin32SelectionReplacementForTransitoryDirectText(
     const TransitoryDirectTextTarget& target) {
-  return target.view_class == L"Edit";
+  milkyway::tsf::host::HostTextTarget host_target;
+  host_target.process_name = target.process_name;
+  host_target.view_class = target.view_class;
+  host_target.focus_class = target.focus_class;
+  host_target.top_level_class = target.top_level_class;
+  host_target.is_transitory = target.is_transitory;
+  return milkyway::tsf::host::SelectHostTextBackendPolicy(host_target) ==
+         milkyway::tsf::host::HostTextBackendPolicy::
+             kNativeEditSelectionReplace;
 }
 
 inline bool CanUseRichEditRangeReplacementForTransitoryDirectText(
     const TransitoryDirectTextTarget& target) {
-  return target.view_class == L"RICHEDIT50W";
+  milkyway::tsf::host::HostTextTarget host_target;
+  host_target.process_name = target.process_name;
+  host_target.view_class = target.view_class;
+  host_target.focus_class = target.focus_class;
+  host_target.top_level_class = target.top_level_class;
+  host_target.is_transitory = target.is_transitory;
+  return milkyway::tsf::host::SelectHostTextBackendPolicy(host_target) ==
+         milkyway::tsf::host::HostTextBackendPolicy::
+             kNativeRichEditSelectionReplace;
+}
+
+inline bool ShouldUseHostBackspaceReplacementForTransitoryDirectText(
+    const TransitoryDirectTextTarget&) {
+  return false;
+}
+
+inline bool HasVerifiedNativeReplacementBackendForTransitoryDirectText(
+    const TransitoryDirectTextTarget& target) {
+  return CanUseWin32SelectionReplacementForTransitoryDirectText(target) ||
+         CanUseRichEditRangeReplacementForTransitoryDirectText(target);
 }
 
 inline bool ShouldUseTransitoryDirectTextComposition(
     const TransitoryDirectTextTarget& target,
     const std::vector<TextEditOperation>& operations, bool is_active) {
   if (!IsTransitoryDirectTextTarget(target)) {
+    return false;
+  }
+  if (!HasVerifiedNativeReplacementBackendForTransitoryDirectText(target)) {
     return false;
   }
   const TransitoryDirectTextOperationPlan plan =

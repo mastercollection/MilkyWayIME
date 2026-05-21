@@ -24,9 +24,11 @@
 #include "engine/shortcut/shortcut_resolver.h"
 #include "engine/state/modifier_state.h"
 #include "tsf/display/display_attribute.h"
+#include "tsf/diagnostics/host_diagnostics.h"
 #include "tsf/edit/transitory_composition_bridge.h"
 #include "tsf/edit/transitory_direct_text_composition.h"
 #include "tsf/edit/tsf_text_edit_sink.h"
+#include "tsf/host/uia_text_policy.h"
 #include "tsf/candidate/candidate_list_ui.h"
 #include "tsf/service/text_service.h"
 
@@ -155,6 +157,9 @@ class TipTextService final : public ITfTextInputProcessorEx,
       TfEditCookie edit_cookie, ITfContext* context,
       const std::vector<edit::TextEditOperation>& operations);
   void ResetTransitoryDirectTextComposition(const wchar_t* reason);
+  HRESULT ApplyUiaWholeValueComposition(
+      const std::vector<edit::TextEditOperation>& operations);
+  void ResetUiaWholeValueComposition(const wchar_t* reason);
 
  private:
   HRESULT AdviseThreadMgrEventSink();
@@ -256,6 +261,7 @@ class TipTextService final : public ITfTextInputProcessorEx,
   HRESULT MoveSelectionToRangeEnd(TfEditCookie edit_cookie, ITfContext* context,
                                   ITfRange* range) const;
   void ResetTransitoryCompositionBridge(const wchar_t* reason);
+  void RefreshFocusedUiaTextTarget(const wchar_t* reason);
   HRESULT ClearCompositionDisplayAttribute(TfEditCookie edit_cookie,
                                            ITfContext* context) const;
   HRESULT ApplyCompositionDisplayAttribute(TfEditCookie edit_cookie,
@@ -263,6 +269,16 @@ class TipTextService final : public ITfTextInputProcessorEx,
                                            const std::wstring& text) const;
   void SyncCompositionTermination();
   void ClearPendingKeyResult();
+#if defined(_DEBUG)
+  diagnostics::HostSnapshot CaptureDiagnosticsSnapshot(
+      ITfDocumentMgr* document_mgr, ITfContext* context) const;
+  void LogDiagnosticsSnapshot(const wchar_t* stage, ITfDocumentMgr* document_mgr,
+                              ITfContext* context) const;
+  void ClassifyHostDiagnostics(const wchar_t* stage,
+                               const diagnostics::HostSnapshot& end_snapshot,
+                               HRESULT write_hr,
+                               bool external_empty_termination) const;
+#endif
 
   std::atomic<ULONG> ref_count_{1};
   ITfThreadMgr* thread_mgr_ = nullptr;
@@ -282,11 +298,23 @@ class TipTextService final : public ITfTextInputProcessorEx,
   bool preserved_keys_registered_ = false;
   TfGuidAtom composing_display_attribute_atom_ = TF_INVALID_GUIDATOM;
   PendingKeyResult pending_key_result_;
+#if defined(_DEBUG)
+  bool diagnostics_activation_observed_ = false;
+  std::uint64_t diagnostics_next_key_path_id_ = 0;
+  std::uint64_t diagnostics_current_key_path_id_ = 0;
+  bool has_test_key_down_snapshot_ = false;
+  bool has_key_down_snapshot_ = false;
+  diagnostics::HostSnapshot test_key_down_snapshot_;
+  diagnostics::HostSnapshot key_down_snapshot_;
+#endif
   engine::layout::LayoutRegistry layout_registry_;
   adapters::dictionary::LibhangulHanjaDictionary hanja_dictionary_;
   engine::session::InputSession session_;
   edit::TransitoryCompositionBridge transitory_composition_bridge_;
   edit::TransitoryDirectTextComposition transitory_direct_text_;
+  host::UiaWholeValueCompositionState uia_whole_value_composition_;
+  host::UiaFocusedTextTarget focused_uia_text_target_;
+  bool has_focused_uia_text_target_ = false;
   edit::TsfTextEditSink edit_sink_;
   TextService logic_;
   candidate::CandidateListUi* candidate_list_ = nullptr;
