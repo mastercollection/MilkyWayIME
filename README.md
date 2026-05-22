@@ -283,6 +283,14 @@ the previous preedit in the host control. If the range cannot be verified,
 MilkyWayIME does not fall back to synthetic host `Backspace` for that RichEdit
 path.
 
+Host text fallback policy is intentionally narrow. `Edit` and `RICHEDIT50W`
+native selection-aware replacement are the only enabled transitory host
+replacement backends. FluentSearch/Avalonia `SearchTextBox` is recorded as a
+known UIA whole-value replacement target, but runtime UIA writing is disabled
+because it does not preserve caret/preedit semantics. Top-level window-only
+targets such as WezTerm and Unity/Nikke are excluded from generic UIA,
+native-edit, and RichEdit fallback selection.
+
 ## Test Execution
 
 Run the test binaries directly after a solution build:
