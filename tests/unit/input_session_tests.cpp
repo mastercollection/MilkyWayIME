@@ -28,6 +28,8 @@
 #include "tsf/edit/text_edit_plan.h"
 #include "tsf/edit/transitory_composition_bridge.h"
 #include "tsf/edit/transitory_direct_text_composition.h"
+#include "tsf/host/host_text_policy.h"
+#include "tsf/host/uia_text_policy.h"
 #include "tsf/service/text_service.h"
 #include "tsf/settings/user_settings.h"
 #include "ui/candidate/candidate_theme.h"
@@ -1605,6 +1607,7 @@ void TestTransitoryDirectTextCompositionGateAndPlan() {
   using milkyway::tsf::edit::BuildTransitoryDirectTextOperationPlan;
   using milkyway::tsf::edit::CanUseRichEditRangeReplacementForTransitoryDirectText;
   using milkyway::tsf::edit::CanUseWin32SelectionReplacementForTransitoryDirectText;
+  using milkyway::tsf::edit::ShouldUseHostBackspaceReplacementForTransitoryDirectText;
   using milkyway::tsf::edit::ShouldUseTransitoryDirectTextComposition;
   using milkyway::tsf::edit::ShouldAppendTransitoryRepeatCommit;
   using milkyway::tsf::edit::TransitoryDirectTextTarget;
@@ -1623,25 +1626,33 @@ void TestTransitoryDirectTextCompositionGateAndPlan() {
       L"host.exe", L"Edit", true};
   const TransitoryDirectTextTarget rich_edit_target{
       L"host.exe", L"RICHEDIT50W", true};
+  const TransitoryDirectTextTarget chrome_widget{
+      L"chrome.exe", L"Chrome_WidgetWin_1", true};
+  const TransitoryDirectTextTarget avalonia_popup{
+      L"host.exe", L"Avalonia-123", true};
 
   const std::vector<TextEditOperation> commit_only = {
       {TextEditOperationType::kCommitText, "a"}};
   assert(!ShouldUseTransitoryDirectTextComposition(rider_target, commit_only,
                                                    false));
-  assert(ShouldUseTransitoryDirectTextComposition(rider_target, commit_only,
-                                                  true));
-  assert(ShouldUseTransitoryDirectTextComposition(other_popup, commit_only,
-                                                  true));
+  assert(!ShouldUseTransitoryDirectTextComposition(rider_target, commit_only,
+                                                   true));
+  assert(!ShouldUseTransitoryDirectTextComposition(other_popup, commit_only,
+                                                   true));
   assert(!ShouldUseTransitoryDirectTextComposition(rider_not_transitory,
                                                    commit_only, true));
-  assert(ShouldUseTransitoryDirectTextComposition(game_popup, commit_only,
-                                                  true));
-  assert(ShouldUseTransitoryDirectTextComposition(perforce_popup, commit_only,
-                                                  true));
+  assert(!ShouldUseTransitoryDirectTextComposition(game_popup, commit_only,
+                                                   true));
+  assert(!ShouldUseTransitoryDirectTextComposition(perforce_popup, commit_only,
+                                                   true));
   assert(ShouldUseTransitoryDirectTextComposition(edit_popup, commit_only,
                                                   true));
   assert(ShouldUseTransitoryDirectTextComposition(rich_edit_target,
                                                   commit_only, true));
+  assert(!ShouldUseTransitoryDirectTextComposition(chrome_widget, commit_only,
+                                                   true));
+  assert(!ShouldUseTransitoryDirectTextComposition(avalonia_popup, commit_only,
+                                                   true));
   assert(CanUseWin32SelectionReplacementForTransitoryDirectText(edit_popup));
   assert(!CanUseWin32SelectionReplacementForTransitoryDirectText(
       rich_edit_target));
@@ -1652,6 +1663,12 @@ void TestTransitoryDirectTextCompositionGateAndPlan() {
   assert(!CanUseRichEditRangeReplacementForTransitoryDirectText(edit_popup));
   assert(!CanUseRichEditRangeReplacementForTransitoryDirectText(
       rider_target));
+  assert(!ShouldUseHostBackspaceReplacementForTransitoryDirectText(
+      rider_target));
+  assert(!ShouldUseHostBackspaceReplacementForTransitoryDirectText(
+      game_popup));
+  assert(!ShouldUseHostBackspaceReplacementForTransitoryDirectText(
+      perforce_popup));
 
   constexpr const char* kPieup = "\xE3\x85\x8D";
   constexpr const char* kPo = "\xED\x8F\xAC";
@@ -1661,16 +1678,22 @@ void TestTransitoryDirectTextCompositionGateAndPlan() {
 
   const std::vector<TextEditOperation> start_preedit = {
       {TextEditOperationType::kStartComposition, kPieup}};
-  assert(ShouldUseTransitoryDirectTextComposition(rider_target, start_preedit,
-                                                  false));
-  assert(ShouldUseTransitoryDirectTextComposition(game_popup, start_preedit,
-                                                  false));
-  assert(ShouldUseTransitoryDirectTextComposition(perforce_popup,
-                                                  start_preedit, false));
+  assert(!ShouldUseTransitoryDirectTextComposition(rider_target, start_preedit,
+                                                   false));
+  assert(!ShouldUseTransitoryDirectTextComposition(game_popup, start_preedit,
+                                                   false));
+  assert(!ShouldUseTransitoryDirectTextComposition(perforce_popup,
+                                                   start_preedit, false));
   assert(!ShouldUseTransitoryDirectTextComposition(rider_not_transitory,
                                                    start_preedit, false));
   assert(ShouldUseTransitoryDirectTextComposition(edit_popup, start_preedit,
                                                   false));
+  assert(ShouldUseTransitoryDirectTextComposition(rich_edit_target,
+                                                  start_preedit, false));
+  assert(!ShouldUseTransitoryDirectTextComposition(chrome_widget,
+                                                   start_preedit, false));
+  assert(!ShouldUseTransitoryDirectTextComposition(avalonia_popup,
+                                                   start_preedit, false));
   auto start_plan = BuildTransitoryDirectTextOperationPlan(start_preedit);
   assert(start_plan.commit_text.empty());
   assert(start_plan.preedit_text == kPieup);
@@ -1718,14 +1741,171 @@ void TestTransitoryDirectTextCompositionGateAndPlan() {
 
   const std::vector<TextEditOperation> end_only = {
       {TextEditOperationType::kEndComposition, {}}};
-  assert(ShouldUseTransitoryDirectTextComposition(rider_target, end_only,
-                                                  true));
+  assert(!ShouldUseTransitoryDirectTextComposition(rider_target, end_only,
+                                                   true));
   assert(ShouldUseTransitoryDirectTextComposition(edit_popup, end_only, true));
+  assert(ShouldUseTransitoryDirectTextComposition(rich_edit_target, end_only,
+                                                  true));
+  assert(!ShouldUseTransitoryDirectTextComposition(chrome_widget, end_only,
+                                                   true));
   auto end_plan = BuildTransitoryDirectTextOperationPlan(end_only);
   assert(end_plan.commit_text.empty());
   assert(end_plan.preedit_text.empty());
   assert(!end_plan.has_preedit);
   assert(end_plan.end_requested);
+}
+
+void TestHostTextPolicyClassifiesKnownTargets() {
+  using milkyway::tsf::host::HostTextBackendPolicy;
+  using milkyway::tsf::host::HostTextPolicyName;
+  using milkyway::tsf::host::HostTextTarget;
+  using milkyway::tsf::host::NormalizeHostClass;
+  using milkyway::tsf::host::SelectHostTextBackendPolicy;
+  using milkyway::tsf::host::SelectTextSurfaceFamily;
+  using milkyway::tsf::host::TextSurfaceFamily;
+
+  assert(NormalizeHostClass(L"Avalonia-11.0.0") == L"Avalonia");
+  assert(NormalizeHostClass(L"RICHEDIT50W") == L"RICHEDIT50W");
+
+  HostTextTarget edit;
+  edit.process_name = L"host.exe";
+  edit.view_class = L"Edit";
+  edit.is_transitory = true;
+  assert(SelectHostTextBackendPolicy(edit) ==
+         HostTextBackendPolicy::kNativeEditSelectionReplace);
+
+  HostTextTarget rich_edit;
+  rich_edit.process_name = L"KakaoTalk.exe";
+  rich_edit.view_class = L"RICHEDIT50W";
+  rich_edit.is_transitory = true;
+  assert(SelectTextSurfaceFamily(rich_edit) ==
+         TextSurfaceFamily::kNativeRichEdit);
+  assert(SelectHostTextBackendPolicy(rich_edit) ==
+         HostTextBackendPolicy::kNativeRichEditSelectionReplace);
+
+  HostTextTarget other_rich_edit = rich_edit;
+  other_rich_edit.process_name = L"OtherHost.exe";
+  assert(SelectTextSurfaceFamily(other_rich_edit) ==
+         TextSurfaceFamily::kNativeRichEdit);
+  assert(SelectHostTextBackendPolicy(other_rich_edit) ==
+         HostTextBackendPolicy::kNativeRichEditSelectionReplace);
+
+  HostTextTarget fluent;
+  fluent.process_name = L"FluentSearch.exe";
+  fluent.view_class = L"Avalonia-123";
+  fluent.focus_class = L"Avalonia-456";
+  fluent.top_level_class = L"Avalonia-789";
+  fluent.is_transitory = true;
+  assert(SelectTextSurfaceFamily(fluent) ==
+         TextSurfaceFamily::kFrameworkAvalonia);
+  assert(SelectHostTextBackendPolicy(fluent) ==
+         HostTextBackendPolicy::kNone);
+
+  HostTextTarget wezterm;
+  wezterm.process_name = L"wezterm-gui.exe";
+  wezterm.view_class = L"org.wezfurlong.wezterm";
+  wezterm.focus_class = L"org.wezfurlong.wezterm";
+  wezterm.top_level_class = L"org.wezfurlong.wezterm";
+  wezterm.is_transitory = true;
+  assert(SelectTextSurfaceFamily(wezterm) ==
+         TextSurfaceFamily::kWindowOnly);
+  assert(SelectHostTextBackendPolicy(wezterm) ==
+         HostTextBackendPolicy::kWindowOnlyExcluded);
+
+  HostTextTarget unity;
+  unity.process_name = L"nikke.exe";
+  unity.view_class = L"UnityWndClass";
+  unity.focus_class = L"UnityWndClass";
+  unity.top_level_class = L"UnityWndClass";
+  assert(SelectTextSurfaceFamily(unity) ==
+         TextSurfaceFamily::kWindowOnly);
+  assert(SelectHostTextBackendPolicy(unity) ==
+         HostTextBackendPolicy::kWindowOnlyExcluded);
+
+  assert(std::wstring_view(HostTextPolicyName(
+             HostTextBackendPolicy::kNativeRichEditSelectionReplace)) ==
+         L"native_richedit_selection_replace");
+}
+
+void TestUiaTextPolicyAllowsOnlyFluentSearchBox() {
+  using milkyway::tsf::host::HostTextBackendPolicy;
+  using milkyway::tsf::host::HostTextPolicyName;
+  using milkyway::tsf::host::SelectUiaTextBackendPolicy;
+  using milkyway::tsf::host::UiaFocusedTextTarget;
+
+  UiaFocusedTextTarget fluent;
+  fluent.framework_id = L"Avalonia";
+  fluent.control_type = L"Edit";
+  fluent.automation_id = L"SearchTextBox";
+  fluent.class_name = L"CustomTextBox";
+  fluent.has_keyboard_focus = true;
+  fluent.is_keyboard_focusable = true;
+  fluent.is_enabled = true;
+  fluent.value_pattern_supported = true;
+  fluent.value_readonly = false;
+  assert(SelectUiaTextBackendPolicy(fluent) ==
+         HostTextBackendPolicy::kUiaAvaloniaSearchBoxWholeValueReplace);
+
+  UiaFocusedTextTarget avalonia_window = fluent;
+  avalonia_window.control_type = L"Window";
+  assert(SelectUiaTextBackendPolicy(avalonia_window) ==
+         HostTextBackendPolicy::kNone);
+
+  UiaFocusedTextTarget random_avalonia_edit = fluent;
+  random_avalonia_edit.automation_id = L"OtherTextBox";
+  assert(SelectUiaTextBackendPolicy(random_avalonia_edit) ==
+         HostTextBackendPolicy::kNone);
+
+  UiaFocusedTextTarget readonly_search = fluent;
+  readonly_search.value_readonly = true;
+  assert(SelectUiaTextBackendPolicy(readonly_search) ==
+         HostTextBackendPolicy::kNone);
+
+  UiaFocusedTextTarget unfocused_search = fluent;
+  unfocused_search.has_keyboard_focus = false;
+  assert(SelectUiaTextBackendPolicy(unfocused_search) ==
+         HostTextBackendPolicy::kNone);
+
+  assert(std::wstring_view(HostTextPolicyName(
+             HostTextBackendPolicy::kUiaAvaloniaSearchBoxWholeValueReplace)) ==
+         L"uia_avalonia_searchbox_whole_value_replace");
+}
+
+void TestUiaWholeValueCompositionStateAppendsAtEndOnly() {
+  using milkyway::tsf::host::UiaWholeValueCompositionState;
+  using milkyway::tsf::edit::TextEditOperation;
+  using milkyway::tsf::edit::TextEditOperationType;
+
+  UiaWholeValueCompositionState state;
+  std::wstring next_value;
+
+  const std::vector<TextEditOperation> start = {
+      {TextEditOperationType::kStartComposition, "\xE3\x85\x8D"}};
+  assert(state.BuildNextValue(L"query", start, &next_value));
+  assert(next_value == L"queryㅍ");
+
+  const std::vector<TextEditOperation> update = {
+      {TextEditOperationType::kUpdateComposition, "\xED\x8F\xAC"}};
+  assert(state.BuildNextValue(L"queryㅍ", update, &next_value));
+  assert(next_value == L"query포");
+
+  const std::vector<TextEditOperation> commit_and_update = {
+      {TextEditOperationType::kCommitText, "\xED\x8F\xAC"},
+      {TextEditOperationType::kUpdateComposition, "\xE3\x85\x8D"}};
+  assert(state.BuildNextValue(L"query포", commit_and_update, &next_value));
+  assert(next_value == L"query포ㅍ");
+
+  const std::vector<TextEditOperation> finish = {
+      {TextEditOperationType::kCommitText, "\xED\x8C\x8C"},
+      {TextEditOperationType::kEndComposition, {}}};
+  assert(state.BuildNextValue(L"query포ㅍ", finish, &next_value));
+  assert(next_value == L"query포파");
+  assert(!state.IsActive());
+
+  assert(state.BuildNextValue(L"next", start, &next_value));
+  assert(next_value == L"nextㅍ");
+  assert(!state.BuildNextValue(L"external edit", update, &next_value));
+  assert(!state.IsActive());
 }
 
 void TestTransitoryCompositionBridgeGateAndState() {
@@ -1746,16 +1926,20 @@ void TestTransitoryCompositionBridgeGateAndState() {
       L"game.exe", L"GameWindowClass", true};
   const TransitoryCompositionBridgeTarget perforce_popup{
       L"p4v.exe", L"Qt5152QWindowIcon", true};
+  const TransitoryCompositionBridgeTarget rich_edit_target{
+      L"KakaoTalk.exe", L"RICHEDIT50W", true};
 
   assert(GetTransitoryCompositionBridgeTargetKind(rider_target) ==
-         TransitoryCompositionBridgeTargetKind::kSuppressEngineReset);
+         TransitoryCompositionBridgeTargetKind::kNone);
   assert(GetTransitoryCompositionBridgeTargetKind(other_popup) ==
-         TransitoryCompositionBridgeTargetKind::kSuppressEngineReset);
+         TransitoryCompositionBridgeTargetKind::kNone);
   assert(GetTransitoryCompositionBridgeTargetKind(rider_not_transitory) ==
          TransitoryCompositionBridgeTargetKind::kNone);
   assert(GetTransitoryCompositionBridgeTargetKind(game_popup) ==
-         TransitoryCompositionBridgeTargetKind::kSuppressEngineReset);
+         TransitoryCompositionBridgeTargetKind::kNone);
   assert(GetTransitoryCompositionBridgeTargetKind(perforce_popup) ==
+         TransitoryCompositionBridgeTargetKind::kNone);
+  assert(GetTransitoryCompositionBridgeTargetKind(rich_edit_target) ==
          TransitoryCompositionBridgeTargetKind::kSuppressEngineReset);
 
   TransitoryCompositionBridgeSnapshot snapshot;
@@ -1766,7 +1950,7 @@ void TestTransitoryCompositionBridgeGateAndState() {
   snapshot.has_tracked_tsf_composition = true;
   snapshot.preedit = L"포";
 
-  assert(ShouldSuppressTransitoryCompositionEngineReset(snapshot));
+  assert(!ShouldSuppressTransitoryCompositionEngineReset(snapshot));
 
   TransitoryCompositionBridgeSnapshot not_composing = snapshot;
   not_composing.internal_composing = false;
@@ -1783,13 +1967,18 @@ void TestTransitoryCompositionBridgeGateAndState() {
 
   TransitoryCompositionBridgeSnapshot game_snapshot = snapshot;
   game_snapshot.target = game_popup;
-  assert(ShouldSuppressTransitoryCompositionEngineReset(game_snapshot));
+  assert(!ShouldSuppressTransitoryCompositionEngineReset(game_snapshot));
+
+  TransitoryCompositionBridgeSnapshot rich_edit_snapshot = snapshot;
+  rich_edit_snapshot.target = rich_edit_target;
+  assert(ShouldSuppressTransitoryCompositionEngineReset(rich_edit_snapshot));
 
   TransitoryCompositionBridge bridge;
   assert(!bridge.IsActive());
   assert(bridge.suppressed_termination_count() == 0);
-  assert(bridge.ShouldSuppressEngineReset(snapshot));
-  assert(bridge.ShouldSuppressEngineReset(game_snapshot));
+  assert(!bridge.ShouldSuppressEngineReset(snapshot));
+  assert(!bridge.ShouldSuppressEngineReset(game_snapshot));
+  assert(bridge.ShouldSuppressEngineReset(rich_edit_snapshot));
   assert(!bridge.ShouldObserveTermination(game_snapshot));
 
   bridge.NoteSuppressedEngineReset(
@@ -1895,6 +2084,9 @@ int main() {
   TestTextEditPlanCompletesCommittedCompositionText();
   TestTextEditPlanPreservesEmptyCompositionUpdateBeforeCompletion();
   TestTransitoryDirectTextCompositionGateAndPlan();
+  TestHostTextPolicyClassifiesKnownTargets();
+  TestUiaTextPolicyAllowsOnlyFluentSearchBox();
+  TestUiaWholeValueCompositionStateAppendsAtEndOnly();
   TestTransitoryCompositionBridgeGateAndState();
   TestCandidateThemeSelection();
   TestCandidateWindowPlacement();
