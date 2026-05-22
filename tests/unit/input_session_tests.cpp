@@ -28,6 +28,7 @@
 #include "tsf/edit/text_edit_plan.h"
 #include "tsf/edit/transitory_composition_bridge.h"
 #include "tsf/edit/transitory_direct_text_composition.h"
+#include "tsf/diagnostics/host_diagnostics.h"
 #include "tsf/host/host_text_policy.h"
 #include "tsf/host/uia_text_policy.h"
 #include "tsf/service/text_service.h"
@@ -1991,6 +1992,96 @@ void TestTransitoryCompositionBridgeGateAndState() {
   assert(bridge.suppressed_termination_count() == 0);
 }
 
+void TestHostDiagnosticsClassifiesStableTarget() {
+  using milkyway::tsf::diagnostics::HostClassification;
+  using milkyway::tsf::diagnostics::HostSnapshot;
+  using milkyway::tsf::diagnostics::ClassifyHost;
+
+  HostSnapshot snapshot;
+  snapshot.context = reinterpret_cast<void*>(0x1000);
+  snapshot.document_mgr = reinterpret_cast<void*>(0x2000);
+  snapshot.top_context = snapshot.context;
+  snapshot.view_hwnd = reinterpret_cast<HWND>(0x3000);
+  snapshot.foreground_hwnd = snapshot.view_hwnd;
+  snapshot.focus_hwnd = snapshot.view_hwnd;
+  snapshot.caret_hwnd = snapshot.view_hwnd;
+  snapshot.has_full_context = true;
+
+  const HostClassification classification =
+      ClassifyHost({snapshot, snapshot}, true, false, S_OK);
+
+  assert(classification == HostClassification::kStableTarget);
+}
+
+void TestHostDiagnosticsClassifiesUnstablePopupTarget() {
+  using milkyway::tsf::diagnostics::HostClassification;
+  using milkyway::tsf::diagnostics::HostSnapshot;
+  using milkyway::tsf::diagnostics::ClassifyHost;
+
+  HostSnapshot before;
+  before.context = reinterpret_cast<void*>(0x1000);
+  before.view_hwnd = reinterpret_cast<HWND>(0x3000);
+  before.foreground_hwnd = before.view_hwnd;
+  before.focus_hwnd = before.view_hwnd;
+  before.caret_hwnd = before.view_hwnd;
+  before.has_full_context = true;
+
+  HostSnapshot after = before;
+  after.focus_hwnd = reinterpret_cast<HWND>(0x4000);
+
+  const HostClassification classification =
+      ClassifyHost({before, after}, true, false, S_OK);
+
+  assert(classification == HostClassification::kUnstablePopupTarget);
+}
+
+void TestHostDiagnosticsClassifiesTransitoryCuas() {
+  using milkyway::tsf::diagnostics::HostClassification;
+  using milkyway::tsf::diagnostics::HostSnapshot;
+  using milkyway::tsf::diagnostics::ClassifyHost;
+
+  HostSnapshot snapshot;
+  snapshot.context = reinterpret_cast<void*>(0x1000);
+  snapshot.is_transitory = true;
+  snapshot.is_cuas_emulated = true;
+  snapshot.has_full_context = false;
+
+  const HostClassification classification =
+      ClassifyHost({snapshot}, true, false, S_OK);
+
+  assert(classification == HostClassification::kTransitoryCuas);
+}
+
+void TestHostDiagnosticsClassifiesActivationUnknownOrFailed() {
+  using milkyway::tsf::diagnostics::HostClassification;
+  using milkyway::tsf::diagnostics::ClassifyHost;
+
+  const HostClassification classification =
+      ClassifyHost({}, false, false, S_OK);
+
+  assert(classification == HostClassification::kActivationUnknownOrFailed);
+}
+
+void TestHostDiagnosticsSeparatesWriteOutcomes() {
+  using milkyway::tsf::diagnostics::HostClassification;
+  using milkyway::tsf::diagnostics::HostSnapshot;
+  using milkyway::tsf::diagnostics::ClassifyHost;
+
+  HostSnapshot snapshot;
+  snapshot.context = reinterpret_cast<void*>(0x1000);
+  snapshot.view_hwnd = reinterpret_cast<HWND>(0x3000);
+  snapshot.focus_hwnd = snapshot.view_hwnd;
+  snapshot.caret_hwnd = snapshot.view_hwnd;
+  snapshot.has_full_context = true;
+
+  assert(ClassifyHost({snapshot}, true, false, E_FAIL) ==
+         HostClassification::kUnsupportedWriteChannel);
+  assert(ClassifyHost({snapshot}, true, true, S_OK) ==
+         HostClassification::kTransitoryCuasUnstableComposition);
+  assert(ClassifyHost({snapshot}, true, false, S_OK) ==
+         HostClassification::kStableTarget);
+}
+
 void TestCandidateThemeSelection() {
   using milkyway::ui::candidate::CandidateThemeMode;
   using milkyway::ui::candidate::ChooseCandidateThemeMode;
@@ -2088,6 +2179,11 @@ int main() {
   TestUiaTextPolicyAllowsOnlyFluentSearchBox();
   TestUiaWholeValueCompositionStateAppendsAtEndOnly();
   TestTransitoryCompositionBridgeGateAndState();
+  TestHostDiagnosticsClassifiesStableTarget();
+  TestHostDiagnosticsClassifiesUnstablePopupTarget();
+  TestHostDiagnosticsClassifiesTransitoryCuas();
+  TestHostDiagnosticsClassifiesActivationUnknownOrFailed();
+  TestHostDiagnosticsSeparatesWriteOutcomes();
   TestCandidateThemeSelection();
   TestCandidateWindowPlacement();
 
