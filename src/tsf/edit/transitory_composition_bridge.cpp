@@ -20,14 +20,23 @@ std::wstring PointerToString(const void* pointer) {
 
 std::wstring TargetDebugText(const TransitoryCompositionBridgeSnapshot& snapshot) {
   return L" process=" + snapshot.target.process_name + L" view_class=" +
-         snapshot.target.view_class + L" transitory=" +
+         snapshot.target.view_class + L" focus_class=" +
+         snapshot.target.focus_class + L" top_level_class=" +
+         snapshot.target.top_level_class + L" transitory=" +
          std::to_wstring(snapshot.target.is_transitory ? 1 : 0) +
          L" context=" + PointerToString(snapshot.context) + L" view_hwnd=" +
-         PointerToString(snapshot.view_hwnd) + L" internal_composing=" +
+         PointerToString(snapshot.view_hwnd) + L" focus_hwnd=" +
+         PointerToString(snapshot.focus_hwnd) + L" internal_composing=" +
          std::to_wstring(snapshot.internal_composing ? 1 : 0) +
          L" has_tracked_tsf_composition=" +
          std::to_wstring(snapshot.has_tracked_tsf_composition ? 1 : 0) +
          L" preedit=\"" + snapshot.preedit + L"\"";
+}
+
+bool HasSameFocusedWindow(const TransitoryCompositionBridgeSnapshot& snapshot) {
+  return snapshot.view_hwnd != nullptr &&
+         snapshot.focus_hwnd != nullptr &&
+         snapshot.view_hwnd == snapshot.focus_hwnd;
 }
 
 }  // namespace
@@ -38,25 +47,44 @@ GetTransitoryCompositionBridgeTargetKind(
   milkyway::tsf::host::HostTextTarget host_target;
   host_target.process_name = target.process_name;
   host_target.view_class = target.view_class;
+  host_target.focus_class = target.focus_class;
+  host_target.top_level_class = target.top_level_class;
   host_target.is_transitory = target.is_transitory;
+  if (!target.is_transitory) {
+    return TransitoryCompositionBridgeTargetKind::kNone;
+  }
+
   const milkyway::tsf::host::HostTextBackendPolicy policy =
       milkyway::tsf::host::SelectHostTextBackendPolicy(host_target);
-  if (target.is_transitory &&
-      (policy == milkyway::tsf::host::HostTextBackendPolicy::
+  if (policy == milkyway::tsf::host::HostTextBackendPolicy::
                      kNativeEditSelectionReplace ||
        policy == milkyway::tsf::host::HostTextBackendPolicy::
-                     kNativeRichEditSelectionReplace)) {
+                     kNativeRichEditSelectionReplace) {
     return TransitoryCompositionBridgeTargetKind::kSuppressEngineReset;
+  }
+  if (milkyway::tsf::host::SelectTextSurfaceFamily(host_target) ==
+      milkyway::tsf::host::TextSurfaceFamily::kWindowOnly) {
+    return TransitoryCompositionBridgeTargetKind::kUntrustedHostTermination;
   }
   return TransitoryCompositionBridgeTargetKind::kNone;
 }
 
 bool ShouldSuppressTransitoryCompositionEngineReset(
     const TransitoryCompositionBridgeSnapshot& snapshot) {
-  return snapshot.context != nullptr && snapshot.internal_composing &&
-         snapshot.has_tracked_tsf_composition &&
-         GetTransitoryCompositionBridgeTargetKind(snapshot.target) ==
-             TransitoryCompositionBridgeTargetKind::kSuppressEngineReset;
+  if (snapshot.context == nullptr || !snapshot.internal_composing ||
+      !snapshot.has_tracked_tsf_composition) {
+    return false;
+  }
+
+  const TransitoryCompositionBridgeTargetKind kind =
+      GetTransitoryCompositionBridgeTargetKind(snapshot.target);
+  if (kind == TransitoryCompositionBridgeTargetKind::kSuppressEngineReset) {
+    return true;
+  }
+  if (kind == TransitoryCompositionBridgeTargetKind::kUntrustedHostTermination) {
+    return !snapshot.preedit.empty() && HasSameFocusedWindow(snapshot);
+  }
+  return false;
 }
 
 bool TransitoryCompositionBridge::IsActive() const {

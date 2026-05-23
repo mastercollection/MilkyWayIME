@@ -35,6 +35,7 @@
 #include "tsf/settings/user_settings.h"
 #include "ui/candidate/candidate_theme.h"
 #include "ui/candidate/candidate_window.h"
+#include "ui/composition/composition_window.h"
 
 namespace {
 
@@ -1763,6 +1764,7 @@ void TestHostTextPolicyClassifiesKnownTargets() {
   using milkyway::tsf::host::NormalizeHostClass;
   using milkyway::tsf::host::SelectHostTextBackendPolicy;
   using milkyway::tsf::host::SelectTextSurfaceFamily;
+  using milkyway::tsf::host::ShouldProbeRuntimeUiaTextBackend;
   using milkyway::tsf::host::TextSurfaceFamily;
 
   assert(NormalizeHostClass(L"Avalonia-11.0.0") == L"Avalonia");
@@ -1774,6 +1776,7 @@ void TestHostTextPolicyClassifiesKnownTargets() {
   edit.is_transitory = true;
   assert(SelectHostTextBackendPolicy(edit) ==
          HostTextBackendPolicy::kNativeEditSelectionReplace);
+  assert(!ShouldProbeRuntimeUiaTextBackend(edit));
 
   HostTextTarget rich_edit;
   rich_edit.process_name = L"KakaoTalk.exe";
@@ -1783,6 +1786,7 @@ void TestHostTextPolicyClassifiesKnownTargets() {
          TextSurfaceFamily::kNativeRichEdit);
   assert(SelectHostTextBackendPolicy(rich_edit) ==
          HostTextBackendPolicy::kNativeRichEditSelectionReplace);
+  assert(!ShouldProbeRuntimeUiaTextBackend(rich_edit));
 
   HostTextTarget other_rich_edit = rich_edit;
   other_rich_edit.process_name = L"OtherHost.exe";
@@ -1801,6 +1805,7 @@ void TestHostTextPolicyClassifiesKnownTargets() {
          TextSurfaceFamily::kFrameworkAvalonia);
   assert(SelectHostTextBackendPolicy(fluent) ==
          HostTextBackendPolicy::kNone);
+  assert(ShouldProbeRuntimeUiaTextBackend(fluent));
 
   HostTextTarget wezterm;
   wezterm.process_name = L"wezterm-gui.exe";
@@ -1812,6 +1817,7 @@ void TestHostTextPolicyClassifiesKnownTargets() {
          TextSurfaceFamily::kWindowOnly);
   assert(SelectHostTextBackendPolicy(wezterm) ==
          HostTextBackendPolicy::kWindowOnlyExcluded);
+  assert(!ShouldProbeRuntimeUiaTextBackend(wezterm));
 
   HostTextTarget unity;
   unity.process_name = L"nikke.exe";
@@ -1822,6 +1828,15 @@ void TestHostTextPolicyClassifiesKnownTargets() {
          TextSurfaceFamily::kWindowOnly);
   assert(SelectHostTextBackendPolicy(unity) ==
          HostTextBackendPolicy::kWindowOnlyExcluded);
+  assert(!ShouldProbeRuntimeUiaTextBackend(unity));
+
+  HostTextTarget unknown;
+  unknown.process_name = L"unknown.exe";
+  unknown.view_class = L"Chrome_WidgetWin_1";
+  unknown.focus_class = L"Chrome_WidgetWin_1";
+  unknown.top_level_class = L"Chrome_WidgetWin_1";
+  assert(SelectTextSurfaceFamily(unknown) == TextSurfaceFamily::kUnknown);
+  assert(!ShouldProbeRuntimeUiaTextBackend(unknown));
 
   assert(std::wstring_view(HostTextPolicyName(
              HostTextBackendPolicy::kNativeRichEditSelectionReplace)) ==
@@ -1850,6 +1865,16 @@ void TestUiaTextPolicyAllowsOnlyFluentSearchBox() {
   UiaFocusedTextTarget avalonia_window = fluent;
   avalonia_window.control_type = L"Window";
   assert(SelectUiaTextBackendPolicy(avalonia_window) ==
+         HostTextBackendPolicy::kNone);
+
+  UiaFocusedTextTarget wezterm_window = fluent;
+  wezterm_window.framework_id = L"Win32";
+  wezterm_window.control_type = L"Window";
+  wezterm_window.automation_id.clear();
+  wezterm_window.class_name = L"org.wezfurlong.wezterm";
+  wezterm_window.value_pattern_supported = true;
+  wezterm_window.value_readonly = false;
+  assert(SelectUiaTextBackendPolicy(wezterm_window) ==
          HostTextBackendPolicy::kNone);
 
   UiaFocusedTextTarget random_avalonia_edit = fluent;
@@ -1909,6 +1934,43 @@ void TestUiaWholeValueCompositionStateAppendsAtEndOnly() {
   assert(!state.IsActive());
 }
 
+void TestWindowOnlyTextEditPlanSeparatesPreeditFromHostWrites() {
+  using milkyway::tsf::edit::PlanWindowOnlyTextEditActions;
+  using milkyway::tsf::edit::PlannedEditActionType;
+  using milkyway::tsf::edit::TextEditOperation;
+  using milkyway::tsf::edit::TextEditOperationType;
+
+  const std::vector<TextEditOperation> start = {
+      {TextEditOperationType::kStartComposition, "\xE3\x85\x87"}};
+  auto plan = PlanWindowOnlyTextEditActions(start);
+  assert(plan.host_actions.empty());
+  assert(plan.show_preedit);
+  assert(plan.preedit_text == "\xE3\x85\x87");
+  assert(!plan.hide_preedit);
+
+  const std::vector<TextEditOperation> commit_and_update = {
+      {TextEditOperationType::kCommitText, "\xEC\x95\x88"},
+      {TextEditOperationType::kUpdateComposition, "\xE3\x84\xB4"}};
+  plan = PlanWindowOnlyTextEditActions(commit_and_update);
+  assert(plan.host_actions.size() == 1);
+  assert(plan.host_actions[0].type == PlannedEditActionType::kCommitText);
+  assert(plan.host_actions[0].text == "\xEC\x95\x88");
+  assert(plan.show_preedit);
+  assert(plan.preedit_text == "\xE3\x84\xB4");
+  assert(!plan.hide_preedit);
+
+  const std::vector<TextEditOperation> finish = {
+      {TextEditOperationType::kCommitText, "\xEB\x85\x95"},
+      {TextEditOperationType::kEndComposition, {}}};
+  plan = PlanWindowOnlyTextEditActions(finish);
+  assert(plan.host_actions.size() == 1);
+  assert(plan.host_actions[0].type == PlannedEditActionType::kCommitText);
+  assert(plan.host_actions[0].text == "\xEB\x85\x95");
+  assert(!plan.show_preedit);
+  assert(plan.preedit_text.empty());
+  assert(plan.hide_preedit);
+}
+
 void TestTransitoryCompositionBridgeGateAndState() {
   using milkyway::tsf::edit::GetTransitoryCompositionBridgeTargetKind;
   using milkyway::tsf::edit::ShouldSuppressTransitoryCompositionEngineReset;
@@ -1929,6 +1991,14 @@ void TestTransitoryCompositionBridgeGateAndState() {
       L"p4v.exe", L"Qt5152QWindowIcon", true};
   const TransitoryCompositionBridgeTarget rich_edit_target{
       L"KakaoTalk.exe", L"RICHEDIT50W", true};
+  TransitoryCompositionBridgeTarget wezterm_target{
+      L"wezterm-gui.exe", L"org.wezfurlong.wezterm", true};
+  wezterm_target.focus_class = L"org.wezfurlong.wezterm";
+  wezterm_target.top_level_class = L"org.wezfurlong.wezterm";
+  TransitoryCompositionBridgeTarget unity_target{
+      L"unity.exe", L"UnityWndClass", true};
+  unity_target.focus_class = L"UnityWndClass";
+  unity_target.top_level_class = L"UnityWndClass";
 
   assert(GetTransitoryCompositionBridgeTargetKind(rider_target) ==
          TransitoryCompositionBridgeTargetKind::kNone);
@@ -1942,11 +2012,16 @@ void TestTransitoryCompositionBridgeGateAndState() {
          TransitoryCompositionBridgeTargetKind::kNone);
   assert(GetTransitoryCompositionBridgeTargetKind(rich_edit_target) ==
          TransitoryCompositionBridgeTargetKind::kSuppressEngineReset);
+  assert(GetTransitoryCompositionBridgeTargetKind(wezterm_target) ==
+         TransitoryCompositionBridgeTargetKind::kUntrustedHostTermination);
+  assert(GetTransitoryCompositionBridgeTargetKind(unity_target) ==
+         TransitoryCompositionBridgeTargetKind::kUntrustedHostTermination);
 
   TransitoryCompositionBridgeSnapshot snapshot;
   snapshot.target = rider_target;
   snapshot.context = reinterpret_cast<ITfContext*>(0x1234);
   snapshot.view_hwnd = reinterpret_cast<HWND>(0x5678);
+  snapshot.focus_hwnd = snapshot.view_hwnd;
   snapshot.internal_composing = true;
   snapshot.has_tracked_tsf_composition = true;
   snapshot.preedit = L"포";
@@ -1974,12 +2049,30 @@ void TestTransitoryCompositionBridgeGateAndState() {
   rich_edit_snapshot.target = rich_edit_target;
   assert(ShouldSuppressTransitoryCompositionEngineReset(rich_edit_snapshot));
 
+  TransitoryCompositionBridgeSnapshot wezterm_snapshot = snapshot;
+  wezterm_snapshot.target = wezterm_target;
+  assert(ShouldSuppressTransitoryCompositionEngineReset(wezterm_snapshot));
+
+  TransitoryCompositionBridgeSnapshot wezterm_focus_moved = wezterm_snapshot;
+  wezterm_focus_moved.focus_hwnd = reinterpret_cast<HWND>(0x9999);
+  assert(!ShouldSuppressTransitoryCompositionEngineReset(wezterm_focus_moved));
+
+  TransitoryCompositionBridgeSnapshot wezterm_empty_preedit = wezterm_snapshot;
+  wezterm_empty_preedit.preedit.clear();
+  assert(!ShouldSuppressTransitoryCompositionEngineReset(wezterm_empty_preedit));
+
+  TransitoryCompositionBridgeSnapshot unity_snapshot = snapshot;
+  unity_snapshot.target = unity_target;
+  assert(ShouldSuppressTransitoryCompositionEngineReset(unity_snapshot));
+
   TransitoryCompositionBridge bridge;
   assert(!bridge.IsActive());
   assert(bridge.suppressed_termination_count() == 0);
   assert(!bridge.ShouldSuppressEngineReset(snapshot));
   assert(!bridge.ShouldSuppressEngineReset(game_snapshot));
   assert(bridge.ShouldSuppressEngineReset(rich_edit_snapshot));
+  assert(bridge.ShouldSuppressEngineReset(wezterm_snapshot));
+  assert(!bridge.ShouldSuppressEngineReset(wezterm_focus_moved));
   assert(!bridge.ShouldObserveTermination(game_snapshot));
 
   bridge.NoteSuppressedEngineReset(
@@ -2128,6 +2221,44 @@ void TestCandidateWindowPlacement() {
   assert(origin.y == 220);
 }
 
+void TestCompositionWindowPlacement() {
+  using milkyway::ui::composition::CalculateCaretRightCompositionAnchor;
+  using milkyway::ui::composition::CalculateCompositionWindowOrigin;
+
+  const RECT work_area = {0, 0, 500, 400};
+  const SIZE window_size = {120, 32};
+
+  POINT anchor =
+      CalculateCaretRightCompositionAnchor(RECT{180, 220, 192, 240});
+  assert(anchor.x == 198);
+  assert(anchor.y == 220);
+
+  anchor =
+      CalculateCaretRightCompositionAnchor(RECT{180, 220, 192, 240}, 4);
+  assert(anchor.x == 196);
+  assert(anchor.y == 220);
+
+  POINT origin =
+      CalculateCompositionWindowOrigin(work_area, window_size, POINT{180, 220});
+  assert(origin.x == 180);
+  assert(origin.y == 220);
+
+  origin =
+      CalculateCompositionWindowOrigin(work_area, window_size, POINT{480, 390});
+  assert(origin.x == 380);
+  assert(origin.y == 358);
+
+  origin =
+      CalculateCompositionWindowOrigin(work_area, window_size, POINT{-20, -10});
+  assert(origin.x == 0);
+  assert(origin.y == 0);
+
+  origin =
+      CalculateCompositionWindowOrigin(work_area, SIZE{800, 600}, POINT{50, 60});
+  assert(origin.x == 0);
+  assert(origin.y == 0);
+}
+
 }  // namespace
 
 int main() {
@@ -2178,6 +2309,7 @@ int main() {
   TestHostTextPolicyClassifiesKnownTargets();
   TestUiaTextPolicyAllowsOnlyFluentSearchBox();
   TestUiaWholeValueCompositionStateAppendsAtEndOnly();
+  TestWindowOnlyTextEditPlanSeparatesPreeditFromHostWrites();
   TestTransitoryCompositionBridgeGateAndState();
   TestHostDiagnosticsClassifiesStableTarget();
   TestHostDiagnosticsClassifiesUnstablePopupTarget();
@@ -2186,6 +2318,7 @@ int main() {
   TestHostDiagnosticsSeparatesWriteOutcomes();
   TestCandidateThemeSelection();
   TestCandidateWindowPlacement();
+  TestCompositionWindowPlacement();
 
   return 0;
 }

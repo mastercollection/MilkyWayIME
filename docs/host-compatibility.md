@@ -162,6 +162,18 @@ Next direction:
 
 ## WezTerm
 
+Support intent:
+
+- WezTerm remains an intended Korean input target. The notes below describe the
+  current evidence and safety constraints; they are not a decision to abandon
+  WezTerm support.
+- Crash prevention has priority over visible text insertion while the usable
+  WezTerm input route is still unverified. A diagnostic `S_OK`, a stable
+  top-level HWND, or advertised top-level UIA text patterns must not trigger an
+  unsafe write backend.
+- Future WezTerm work should look for a terminal-specific or otherwise verified
+  input path that can accept Korean text without destabilizing the host.
+
 Observed host identity:
 
 - Process: `wezterm-gui.exe`
@@ -201,10 +213,14 @@ Observed host identity:
     context.
   - `WriteProbe` reported `S_OK` for `CommitText` and `StartComposition`, but
     the host immediately delivered `OnCompositionTerminated`.
-  - `TransitoryBridge[SuppressEngineReset]` became active and suppressed the
-    internal engine reset after external composition termination. This preserves
-    MilkyWayIME's internal preedit state; it does not prove visible terminal
-    text insertion.
+  - `TransitoryBridge[SuppressEngineReset]` preserved MilkyWayIME's internal
+    preedit state after external composition termination, but this produced
+    duplicated evolving preedit in the host (`ㅇ아안안...`) because WezTerm
+    terminated every TSF inline composition and later writes appended the next
+    preedit snapshot.
+  - This is evidence that host composition termination is not a trustworthy
+    lifecycle signal for WezTerm, and that preserving internal state while still
+    writing TSF preedit to the host is not viable.
   - Transitory parent probing did not expose useful TSF/COM insertion
     interfaces, and document feed probing returned no usable text surface.
   - `HostDiagnostics` classified the target as `stable_target` with
@@ -215,6 +231,8 @@ Observed host identity:
 
 Current classification:
 
+- Current visible Korean input behavior is a known failure to be fixed, not the
+  desired product behavior.
 - `WezTerm` should not use the FluentSearch UIA ValuePattern backend.
 - The focused UIA element is the top-level terminal window, not an `Edit`
   element or a stable text input surface.
@@ -226,10 +244,16 @@ Current classification:
   TIP path. The exclusion reason is that the TIP/UIA identities still do not
   expose a usable text input surface.
 - Do not treat `stable_target` or `S_OK` write diagnostics as enough for
-  WezTerm. The visible terminal input result is still failure.
-- Treat the observed MilkyWayIME route as TSF transitory composition with
-  external termination suppression, not as UIA `SetValue`, native Edit/RichEdit,
-  or Nikke-style IMM result-message input.
+  WezTerm. The visible terminal input result is still failure, and the runtime
+  must prefer a no-crash fallback over speculative writes.
+- Treat the observed MilkyWayIME route as `window_only` overlay composition:
+  keep libhangul preedit internally, show preedit in an IME-owned overlay near
+  the caret/window anchor, and send only confirmed text to the host. Do not send
+  TSF `StartComposition` or `UpdateComposition` preedit writes to WezTerm.
+- For overlay placement, prefer TSF `GetTextExt` on the current selection or
+  active composition when available, then GUI caret, then read-only UIA
+  `TextPattern` bounding rectangles, then active/foreground window fallback.
+  UIA `ValuePattern.SetValue()` remains excluded.
 - Do not treat `EM_GETSEL`/`EM_REPLACESEL` return values on the top-level
   WezTerm window as native edit support.
 - The surface classification for this target is `window_only`; this is a

@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "engine/layout/base_layout_json_loader.h"
+#include "tsf/edit/text_edit_plan.h"
 #include "tsf/langbar/input_mode_lang_bar_item.h"
 #if defined(_DEBUG)
 #include "tsf/debug/debug_log.h"
@@ -100,6 +101,8 @@ bool UiaElementBool(IUIAutomationElement* element, PROPERTYID property) {
   return result;
 }
 
+bool IsUsableScreenRect(const RECT& rect);
+
 HRESULT CaptureFocusedUiaTextTarget(
     host::UiaFocusedTextTarget* target, std::wstring* current_value,
     IUIAutomationValuePattern** value_pattern_out) {
@@ -173,6 +176,142 @@ HRESULT CaptureFocusedUiaTextTarget(
   SysFreeString(value);
   *value_pattern_out = value_pattern;
   return S_OK;
+}
+
+bool RectFromUiaSafeArray(SAFEARRAY* rects, RECT* rect) {
+  if (rects == nullptr || rect == nullptr || rects->cDims != 1 ||
+      rects->rgsabound[0].cElements < 4) {
+    return false;
+  }
+
+  double* data = nullptr;
+  if (FAILED(SafeArrayAccessData(rects, reinterpret_cast<void**>(&data))) ||
+      data == nullptr) {
+    return false;
+  }
+  *rect = RECT{static_cast<LONG>(data[0]), static_cast<LONG>(data[1]),
+               static_cast<LONG>(data[0] + data[2]),
+               static_cast<LONG>(data[1] + data[3])};
+  SafeArrayUnaccessData(rects);
+  return IsUsableScreenRect(*rect);
+}
+
+HRESULT UiaRangeRect(IUIAutomationTextRange* range, RECT* rect) {
+  if (range == nullptr || rect == nullptr) {
+    return E_INVALIDARG;
+  }
+  SAFEARRAY* rects = nullptr;
+  HRESULT hr = range->GetBoundingRectangles(&rects);
+  if (SUCCEEDED(hr) && RectFromUiaSafeArray(rects, rect)) {
+    SafeArrayDestroy(rects);
+    return S_OK;
+  }
+  if (rects != nullptr) {
+    SafeArrayDestroy(rects);
+    rects = nullptr;
+  }
+
+  IUIAutomationTextRange* expanded = nullptr;
+  hr = range->Clone(&expanded);
+  if (SUCCEEDED(hr) && expanded != nullptr) {
+    expanded->ExpandToEnclosingUnit(TextUnit_Character);
+    hr = expanded->GetBoundingRectangles(&rects);
+    expanded->Release();
+    if (SUCCEEDED(hr) && RectFromUiaSafeArray(rects, rect)) {
+      SafeArrayDestroy(rects);
+      return S_OK;
+    }
+    if (rects != nullptr) {
+      SafeArrayDestroy(rects);
+      rects = nullptr;
+    }
+  }
+
+  expanded = nullptr;
+  hr = range->Clone(&expanded);
+  if (SUCCEEDED(hr) && expanded != nullptr) {
+    expanded->ExpandToEnclosingUnit(TextUnit_Line);
+    hr = expanded->GetBoundingRectangles(&rects);
+    expanded->Release();
+    if (SUCCEEDED(hr) && RectFromUiaSafeArray(rects, rect)) {
+      SafeArrayDestroy(rects);
+      return S_OK;
+    }
+    if (rects != nullptr) {
+      SafeArrayDestroy(rects);
+    }
+  }
+
+  return E_FAIL;
+}
+
+std::optional<RECT> FocusedUiaTextPatternCaretRect() {
+  IUIAutomation* automation = nullptr;
+  HRESULT hr = CoCreateInstance(CLSID_CUIAutomation, nullptr,
+                                CLSCTX_INPROC_SERVER,
+                                IID_PPV_ARGS(&automation));
+  if (FAILED(hr) || automation == nullptr) {
+    return std::nullopt;
+  }
+
+  IUIAutomationElement* focused = nullptr;
+  hr = automation->GetFocusedElement(&focused);
+  automation->Release();
+  if (FAILED(hr) || focused == nullptr) {
+    return std::nullopt;
+  }
+
+  IUIAutomationTextPattern* text_pattern = nullptr;
+  hr = focused->GetCurrentPatternAs(UIA_TextPatternId,
+                                    IID_PPV_ARGS(&text_pattern));
+  if (FAILED(hr) || text_pattern == nullptr) {
+    focused->Release();
+    return std::nullopt;
+  }
+
+  IUIAutomationTextRangeArray* selection = nullptr;
+  hr = text_pattern->GetSelection(&selection);
+  text_pattern->Release();
+  if (FAILED(hr) || selection == nullptr) {
+    focused->Release();
+    return std::nullopt;
+  }
+
+  int length = 0;
+  selection->get_Length(&length);
+  if (length <= 0) {
+    selection->Release();
+    focused->Release();
+    return std::nullopt;
+  }
+
+  IUIAutomationTextRange* range = nullptr;
+  hr = selection->GetElement(0, &range);
+  selection->Release();
+  if (FAILED(hr) || range == nullptr) {
+    focused->Release();
+    return std::nullopt;
+  }
+
+  RECT rect = {};
+  hr = UiaRangeRect(range, &rect);
+  range->Release();
+  RECT element_rect = {};
+  if (SUCCEEDED(hr) &&
+      SUCCEEDED(focused->get_CurrentBoundingRectangle(&element_rect)) &&
+      IsUsableScreenRect(element_rect)) {
+    const LONG element_width = element_rect.right - element_rect.left;
+    const LONG element_height = element_rect.bottom - element_rect.top;
+    if (rect.right <= element_width && rect.bottom <= element_height &&
+        rect.left < element_rect.left) {
+      OffsetRect(&rect, element_rect.left, element_rect.top);
+    }
+  }
+  focused->Release();
+  if (FAILED(hr) || !IsUsableScreenRect(rect)) {
+    return std::nullopt;
+  }
+  return rect;
 }
 
 std::wstring FormatHex(std::uint32_t value);
@@ -288,6 +427,14 @@ bool IsUsableScreenRect(const RECT& rect) {
   return rect.right >= rect.left && rect.bottom > rect.top;
 }
 
+#if defined(_DEBUG)
+std::wstring RectToString(const RECT& rect) {
+  return L"(" + std::to_wstring(rect.left) + L"," +
+         std::to_wstring(rect.top) + L"," + std::to_wstring(rect.right) +
+         L"," + std::to_wstring(rect.bottom) + L")";
+}
+#endif
+
 std::optional<POINT> AnchorFromGuiThreadCaret() {
   GUITHREADINFO gui_thread_info = {};
   gui_thread_info.cbSize = sizeof(gui_thread_info);
@@ -308,6 +455,88 @@ std::optional<POINT> AnchorFromGuiThreadCaret() {
   }
 
   return std::nullopt;
+}
+
+std::optional<POINT> AnchorFromGuiThreadCaretRight() {
+  GUITHREADINFO gui_thread_info = {};
+  gui_thread_info.cbSize = sizeof(gui_thread_info);
+  if (!GetGUIThreadInfo(0, &gui_thread_info)) {
+    return std::nullopt;
+  }
+
+  if (IsUsableScreenRect(gui_thread_info.rcCaret)) {
+    return ui::composition::CalculateCaretRightCompositionAnchor(
+        gui_thread_info.rcCaret);
+  }
+
+  if (gui_thread_info.hwndCaret != nullptr) {
+    POINT caret = {};
+    if (GetCaretPos(&caret) &&
+        ClientToScreen(gui_thread_info.hwndCaret, &caret)) {
+      caret.x += 6;
+      return caret;
+    }
+  }
+
+  return std::nullopt;
+}
+
+std::optional<POINT> ActiveViewWindowAnchor(ITfContext* context) {
+  if (context == nullptr) {
+    return std::nullopt;
+  }
+
+  ITfContextView* view = nullptr;
+  HRESULT hr = context->GetActiveView(&view);
+  if (FAILED(hr) || view == nullptr) {
+    return std::nullopt;
+  }
+
+  HWND hwnd = nullptr;
+  hr = view->GetWnd(&hwnd);
+  SafeRelease(view);
+  if (FAILED(hr) || hwnd == nullptr || !IsWindow(hwnd)) {
+    return std::nullopt;
+  }
+
+  RECT rect = {};
+  if (!GetWindowRect(hwnd, &rect) || !IsUsableScreenRect(rect)) {
+    return std::nullopt;
+  }
+  return POINT{rect.left + 12, rect.top + 32};
+}
+
+HWND ActiveViewWindow(ITfContext* context) {
+  if (context == nullptr) {
+    return nullptr;
+  }
+
+  ITfContextView* view = nullptr;
+  HRESULT hr = context->GetActiveView(&view);
+  if (FAILED(hr) || view == nullptr) {
+    return nullptr;
+  }
+
+  HWND hwnd = nullptr;
+  hr = view->GetWnd(&hwnd);
+  SafeRelease(view);
+  if (FAILED(hr) || hwnd == nullptr || !IsWindow(hwnd)) {
+    return nullptr;
+  }
+  return hwnd;
+}
+
+std::optional<POINT> ForegroundWindowAnchor() {
+  HWND hwnd = GetForegroundWindow();
+  if (hwnd == nullptr || !IsWindow(hwnd)) {
+    return std::nullopt;
+  }
+
+  RECT rect = {};
+  if (!GetWindowRect(hwnd, &rect) || !IsUsableScreenRect(rect)) {
+    return std::nullopt;
+  }
+  return POINT{rect.left + 12, rect.top + 32};
 }
 
 bool IsImeModeToggleVirtualKey(WPARAM wparam) {
@@ -431,6 +660,84 @@ class TextExtentEditSession final : public EditSessionBase {
   ITfRange* range_ = nullptr;
   std::optional<RECT>* text_rect_ = nullptr;
 };
+
+class CurrentSelectionTextExtentEditSession final : public EditSessionBase {
+ public:
+  CurrentSelectionTextExtentEditSession(ITfContext* context,
+                                        ITfContextView* view,
+                                        std::optional<RECT>* text_rect)
+      : context_(context), view_(view), text_rect_(text_rect) {
+    context_->AddRef();
+    view_->AddRef();
+  }
+
+  ~CurrentSelectionTextExtentEditSession() override {
+    view_->Release();
+    context_->Release();
+  }
+
+  STDMETHODIMP DoEditSession(TfEditCookie edit_cookie) override {
+    if (text_rect_ == nullptr) {
+      return E_INVALIDARG;
+    }
+
+    TF_SELECTION selection = {};
+    ULONG fetched = 0;
+    const HRESULT selection_hr =
+        context_->GetSelection(edit_cookie, 0, 1, &selection, &fetched);
+    if (FAILED(selection_hr) || fetched == 0 || selection.range == nullptr) {
+      return S_OK;
+    }
+
+    RECT rect = {};
+    BOOL clipped = FALSE;
+    const HRESULT extent_hr =
+        view_->GetTextExt(edit_cookie, selection.range, &rect, &clipped);
+    selection.range->Release();
+    if (SUCCEEDED(extent_hr) && IsUsableScreenRect(rect)) {
+      *text_rect_ = rect;
+    }
+    return S_OK;
+  }
+
+ private:
+  ITfContext* context_ = nullptr;
+  ITfContextView* view_ = nullptr;
+  std::optional<RECT>* text_rect_ = nullptr;
+};
+
+std::optional<RECT> CurrentSelectionTextRect(ITfContext* context,
+                                             TfClientId client_id) {
+  if (context == nullptr || client_id == TF_CLIENTID_NULL) {
+    return std::nullopt;
+  }
+
+  ITfContextView* view = nullptr;
+  HRESULT hr = context->GetActiveView(&view);
+  if (FAILED(hr) || view == nullptr) {
+    return std::nullopt;
+  }
+
+  std::optional<RECT> text_rect;
+  CurrentSelectionTextExtentEditSession* edit_session =
+      new (std::nothrow)
+          CurrentSelectionTextExtentEditSession(context, view, &text_rect);
+  SafeRelease(view);
+  if (edit_session == nullptr) {
+    return std::nullopt;
+  }
+
+  HRESULT edit_session_result = E_FAIL;
+  hr = context->RequestEditSession(client_id, edit_session,
+                                   TF_ES_SYNC | TF_ES_READ,
+                                   &edit_session_result);
+  edit_session->Release();
+  if (FAILED(hr) || FAILED(edit_session_result)) {
+    return std::nullopt;
+  }
+
+  return text_rect;
+}
 
 HRESULT SetContextSelectionToRangeEnd(TfEditCookie edit_cookie,
                                       ITfContext* context, ITfRange* range) {
@@ -969,11 +1276,55 @@ edit::TransitoryCompositionBridgeSnapshot CaptureTransitoryBridgeSnapshot(
     if (SUCCEEDED(view->GetWnd(&hwnd))) {
       snapshot.view_hwnd = hwnd;
       snapshot.target.view_class = WindowClassName(hwnd);
+      snapshot.target.top_level_class = WindowClassName(GetAncestor(hwnd, GA_ROOT));
     }
     view->Release();
   }
 
+  GUITHREADINFO gui_thread_info = {};
+  gui_thread_info.cbSize = sizeof(gui_thread_info);
+  if (GetGUIThreadInfo(0, &gui_thread_info)) {
+    snapshot.focus_hwnd = gui_thread_info.hwndFocus;
+    snapshot.target.focus_class = WindowClassName(gui_thread_info.hwndFocus);
+    if (snapshot.target.top_level_class.empty()) {
+      snapshot.target.top_level_class =
+          WindowClassName(GetAncestor(gui_thread_info.hwndFocus, GA_ROOT));
+    }
+  }
+
   return snapshot;
+}
+
+host::HostTextTarget CaptureRuntimeUiaHostTextTarget(ITfContext* context) {
+  host::HostTextTarget target;
+  target.process_name = CurrentProcessName();
+  if (context == nullptr) {
+    return target;
+  }
+
+  target.is_transitory = IsContextTransitory(context);
+
+  ITfContextView* view = nullptr;
+  if (SUCCEEDED(context->GetActiveView(&view)) && view != nullptr) {
+    HWND hwnd = nullptr;
+    if (SUCCEEDED(view->GetWnd(&hwnd))) {
+      target.view_class = WindowClassName(hwnd);
+      target.top_level_class = WindowClassName(GetAncestor(hwnd, GA_ROOT));
+    }
+    view->Release();
+  }
+
+  GUITHREADINFO gui_thread_info = {};
+  gui_thread_info.cbSize = sizeof(gui_thread_info);
+  if (GetGUIThreadInfo(0, &gui_thread_info)) {
+    target.focus_class = WindowClassName(gui_thread_info.hwndFocus);
+    if (target.top_level_class.empty()) {
+      target.top_level_class =
+          WindowClassName(GetAncestor(gui_thread_info.hwndFocus, GA_ROOT));
+    }
+  }
+
+  return target;
 }
 
 #if defined(_DEBUG)
@@ -1180,6 +1531,8 @@ const wchar_t* TransitoryBridgeTargetKindName(
       return L"ObserveOnly";
     case edit::TransitoryCompositionBridgeTargetKind::kSuppressEngineReset:
       return L"SuppressEngineReset";
+    case edit::TransitoryCompositionBridgeTargetKind::kUntrustedHostTermination:
+      return L"UntrustedHostTermination";
   }
 
   return L"Unknown";
@@ -1193,11 +1546,16 @@ std::wstring TransitoryBridgeSnapshotDiagnostics(
          std::wstring(TransitoryBridgeTargetKindName(kind)) +
          L" transitory_bridge_process=" + snapshot.target.process_name +
          L" transitory_bridge_view_class=" + snapshot.target.view_class +
+         L" transitory_bridge_focus_class=" + snapshot.target.focus_class +
+         L" transitory_bridge_top_level_class=" +
+         snapshot.target.top_level_class +
          L" transitory_bridge_transitory=" +
          std::to_wstring(snapshot.target.is_transitory ? 1 : 0) +
          L" transitory_bridge_context=" + PointerToString(snapshot.context) +
          L" transitory_bridge_view_hwnd=" +
          PointerToString(snapshot.view_hwnd) +
+         L" transitory_bridge_focus_hwnd=" +
+         PointerToString(snapshot.focus_hwnd) +
          L" transitory_bridge_internal_engine_composing=" +
          std::to_wstring(snapshot.internal_composing ? 1 : 0) +
          L" transitory_bridge_tracked_tsf_composition=" +
@@ -1924,7 +2282,7 @@ STDMETHODIMP TipTextService::ActivateEx(ITfThreadMgr* thread_mgr,
     Deactivate();
     return hr;
   }
-  RefreshFocusedUiaTextTarget(L"ActivateEx");
+  RefreshFocusedUiaTextTarget(text_edit_sink_context_, L"ActivateEx");
 
   hr = AddInputModeLanguageBarItem();
   if (FAILED(hr)) {
@@ -2032,7 +2390,8 @@ STDMETHODIMP TipTextService::OnSetFocus(ITfDocumentMgr* focused,
 
   const HRESULT refresh_hr = RefreshFocusedContext(focused);
   if (SUCCEEDED(refresh_hr)) {
-    RefreshFocusedUiaTextTarget(L"OnSetFocus(DocumentMgr)");
+    RefreshFocusedUiaTextTarget(text_edit_sink_context_,
+                                L"OnSetFocus(DocumentMgr)");
     SyncLayoutSelectionFromSettings(L"OnSetFocus(DocumentMgr)");
   }
 #if defined(_DEBUG)
@@ -2052,7 +2411,7 @@ STDMETHODIMP TipTextService::OnPushContext(ITfContext* context) {
 #endif
   const HRESULT refresh_hr = RefreshFocusedContext();
   if (SUCCEEDED(refresh_hr)) {
-    RefreshFocusedUiaTextTarget(L"OnPushContext");
+    RefreshFocusedUiaTextTarget(text_edit_sink_context_, L"OnPushContext");
     SyncLayoutSelectionFromSettings(L"OnPushContext");
   }
   return refresh_hr;
@@ -2067,7 +2426,7 @@ STDMETHODIMP TipTextService::OnPopContext(ITfContext* context) {
 #endif
   const HRESULT refresh_hr = RefreshFocusedContext();
   if (SUCCEEDED(refresh_hr)) {
-    RefreshFocusedUiaTextTarget(L"OnPopContext");
+    RefreshFocusedUiaTextTarget(text_edit_sink_context_, L"OnPopContext");
     SyncLayoutSelectionFromSettings(L"OnPopContext");
   }
   return refresh_hr;
@@ -2766,11 +3125,108 @@ HRESULT TipTextService::ApplyTransitoryDirectTextComposition(
 void TipTextService::ResetTransitoryDirectTextComposition(
     const wchar_t* reason) {
   transitory_direct_text_.Reset(reason);
+  ResetWindowOnlyComposition(reason);
   ResetUiaWholeValueComposition(reason);
 }
 
-HRESULT TipTextService::ApplyUiaWholeValueComposition(
+HRESULT TipTextService::ApplyWindowOnlyComposition(
+    TfEditCookie edit_cookie, ITfContext* context,
     const std::vector<edit::TextEditOperation>& operations) {
+  const host::HostTextTarget host_target =
+      CaptureRuntimeUiaHostTextTarget(context);
+  if (host::SelectTextSurfaceFamily(host_target) !=
+      host::TextSurfaceFamily::kWindowOnly) {
+    return S_FALSE;
+  }
+
+  ResetUiaWholeValueComposition(L"WindowOnlyComposition");
+  const edit::WindowOnlyTextEditPlan plan =
+      edit::PlanWindowOnlyTextEditActions(operations);
+
+#if defined(_DEBUG)
+  debug::DebugLog(
+      L"[MilkyWayIME][WindowOnlyComposition][Apply] process=" +
+      host_target.process_name + L" view_class=" + host_target.view_class +
+      L" focus_class=" + host_target.focus_class + L" top_level_class=" +
+      host_target.top_level_class + L" host_actions=" +
+      std::to_wstring(plan.host_actions.size()) + L" show_preedit=" +
+      std::to_wstring(plan.show_preedit ? 1 : 0) + L" hide_preedit=" +
+      std::to_wstring(plan.hide_preedit ? 1 : 0));
+#endif
+
+  for (const edit::PlannedEditAction& action : plan.host_actions) {
+    if (action.type != edit::PlannedEditActionType::kCommitText) {
+      return E_UNEXPECTED;
+    }
+    const HRESULT hr = CommitText(edit_cookie, context, Utf8ToWide(action.text));
+    if (FAILED(hr)) {
+      return hr;
+    }
+  }
+
+  if (plan.show_preedit) {
+    const std::optional<POINT> anchor = WindowOnlyCompositionAnchor(context);
+    if (!anchor.has_value()) {
+      ResetWindowOnlyComposition(L"WindowOnlyCompositionNoAnchor");
+      return S_OK;
+    }
+    if (window_only_composition_window_ == nullptr) {
+      window_only_composition_window_ =
+          std::make_unique<ui::composition::CompositionWindow>(
+              ModuleInstance());
+    }
+    HWND owner_hwnd = ActiveViewWindow(context);
+    if (owner_hwnd == nullptr) {
+      owner_hwnd = GetForegroundWindow();
+    }
+    if (!window_only_composition_window_->Show(Utf8ToWide(plan.preedit_text),
+                                               *anchor, owner_hwnd)) {
+      return E_FAIL;
+    }
+  } else if (plan.hide_preedit) {
+    ResetWindowOnlyComposition(L"WindowOnlyCompositionEnd");
+  }
+
+  return S_OK;
+}
+
+void TipTextService::ResetWindowOnlyComposition(const wchar_t* reason) {
+#if defined(_DEBUG)
+  if (window_only_composition_window_ != nullptr &&
+      window_only_composition_window_->IsShown()) {
+    debug::DebugLog(
+        L"[MilkyWayIME][WindowOnlyComposition][Reset] reason=" +
+        std::wstring(reason != nullptr ? reason : L"<null>"));
+  }
+#else
+  (void)reason;
+#endif
+  if (window_only_composition_window_ != nullptr) {
+    window_only_composition_window_->Hide();
+  }
+}
+
+HRESULT TipTextService::ApplyUiaWholeValueComposition(
+    ITfContext* context,
+    const std::vector<edit::TextEditOperation>& operations) {
+  const host::HostTextTarget host_target =
+      CaptureRuntimeUiaHostTextTarget(context);
+  if (!host::ShouldProbeRuntimeUiaTextBackend(host_target)) {
+    const host::TextSurfaceFamily family =
+        host::SelectTextSurfaceFamily(host_target);
+    ResetUiaWholeValueComposition(L"RuntimeUiaProbeSkipped");
+#if defined(_DEBUG)
+    debug::DebugLog(
+        L"[MilkyWayIME][RuntimeUiaProbeSkipped] reason=surface_policy family=" +
+        std::wstring(host::TextSurfaceFamilyName(family)) + L" process=" +
+        host_target.process_name + L" view_class=" + host_target.view_class +
+        L" focus_class=" + host_target.focus_class + L" top_level_class=" +
+        host_target.top_level_class + L" transitory=" +
+        std::to_wstring(host_target.is_transitory ? 1 : 0));
+#endif
+    return S_FALSE;
+  }
+
   host::UiaFocusedTextTarget target;
   std::wstring current_value;
   IUIAutomationValuePattern* value_pattern = nullptr;
@@ -2839,8 +3295,29 @@ void TipTextService::ResetUiaWholeValueComposition(const wchar_t* reason) {
   has_focused_uia_text_target_ = false;
 }
 
-void TipTextService::RefreshFocusedUiaTextTarget(const wchar_t* reason) {
-  (void)reason;
+void TipTextService::RefreshFocusedUiaTextTarget(ITfContext* context,
+                                                 const wchar_t* reason) {
+  const host::HostTextTarget host_target =
+      CaptureRuntimeUiaHostTextTarget(context);
+  if (!host::ShouldProbeRuntimeUiaTextBackend(host_target)) {
+    const host::TextSurfaceFamily family =
+        host::SelectTextSurfaceFamily(host_target);
+    focused_uia_text_target_ = {};
+    has_focused_uia_text_target_ = false;
+#if defined(_DEBUG)
+    debug::DebugLog(
+        L"[MilkyWayIME][RuntimeUiaProbeSkipped] reason=" +
+        std::wstring(reason != nullptr ? reason : L"<null>") +
+        L" family=" + std::wstring(host::TextSurfaceFamilyName(family)) +
+        L" process=" + host_target.process_name + L" view_class=" +
+        host_target.view_class + L" focus_class=" + host_target.focus_class +
+        L" top_level_class=" + host_target.top_level_class +
+        L" transitory=" +
+        std::to_wstring(host_target.is_transitory ? 1 : 0));
+#endif
+    return;
+  }
+
   host::UiaFocusedTextTarget target;
   std::wstring current_value;
   IUIAutomationValuePattern* value_pattern = nullptr;
@@ -4619,6 +5096,95 @@ std::optional<POINT> TipTextService::CandidateWindowAnchor(
   POINT cursor = {};
   if (GetCursorPos(&cursor)) {
     return cursor;
+  }
+
+  return std::nullopt;
+}
+
+std::optional<POINT> TipTextService::WindowOnlyCompositionAnchor(
+    ITfContext* context) const {
+  const std::optional<RECT> composition_rect = CompositionTextRect(context);
+  if (composition_rect.has_value()) {
+    const POINT anchor =
+        ui::composition::CalculateCaretRightCompositionAnchor(
+            *composition_rect);
+#if defined(_DEBUG)
+    debug::DebugLog(
+        L"[MilkyWayIME][WindowOnlyComposition][Anchor] source=composition "
+        L"rect=" +
+        RectToString(*composition_rect) + L" anchor=(" +
+        std::to_wstring(anchor.x) + L"," + std::to_wstring(anchor.y) +
+        L") placement=caret_right");
+#endif
+    return anchor;
+  }
+
+  const std::optional<RECT> selection_rect =
+      CurrentSelectionTextRect(context, client_id_);
+  if (selection_rect.has_value()) {
+    const POINT anchor =
+        ui::composition::CalculateCaretRightCompositionAnchor(*selection_rect);
+#if defined(_DEBUG)
+    debug::DebugLog(
+        L"[MilkyWayIME][WindowOnlyComposition][Anchor] source=selection "
+        L"rect=" +
+        RectToString(*selection_rect) + L" anchor=(" +
+        std::to_wstring(anchor.x) + L"," + std::to_wstring(anchor.y) +
+        L") placement=caret_right");
+#endif
+    return anchor;
+  }
+
+  const std::optional<POINT> caret_anchor = AnchorFromGuiThreadCaretRight();
+  if (caret_anchor.has_value()) {
+#if defined(_DEBUG)
+    debug::DebugLog(
+        L"[MilkyWayIME][WindowOnlyComposition][Anchor] source=gui_caret "
+        L"x=" +
+        std::to_wstring(caret_anchor->x) + L" y=" +
+        std::to_wstring(caret_anchor->y) + L" placement=caret_right");
+#endif
+    return caret_anchor;
+  }
+
+  const std::optional<RECT> uia_text_rect = FocusedUiaTextPatternCaretRect();
+  if (uia_text_rect.has_value()) {
+    const POINT anchor =
+        ui::composition::CalculateCaretRightCompositionAnchor(*uia_text_rect);
+#if defined(_DEBUG)
+    debug::DebugLog(
+        L"[MilkyWayIME][WindowOnlyComposition][Anchor] source=uia_text "
+        L"rect=" +
+        RectToString(*uia_text_rect) + L" anchor=(" +
+        std::to_wstring(anchor.x) + L"," + std::to_wstring(anchor.y) +
+        L") placement=caret_right");
+#endif
+    return anchor;
+  }
+
+  const std::optional<POINT> active_view_anchor =
+      ActiveViewWindowAnchor(context);
+  if (active_view_anchor.has_value()) {
+#if defined(_DEBUG)
+    debug::DebugLog(
+        L"[MilkyWayIME][WindowOnlyComposition][Anchor] source=active_view "
+        L"x=" +
+        std::to_wstring(active_view_anchor->x) + L" y=" +
+        std::to_wstring(active_view_anchor->y));
+#endif
+    return active_view_anchor;
+  }
+
+  const std::optional<POINT> foreground_anchor = ForegroundWindowAnchor();
+  if (foreground_anchor.has_value()) {
+#if defined(_DEBUG)
+    debug::DebugLog(
+        L"[MilkyWayIME][WindowOnlyComposition][Anchor] source=foreground "
+        L"x=" +
+        std::to_wstring(foreground_anchor->x) + L" y=" +
+        std::to_wstring(foreground_anchor->y));
+#endif
+    return foreground_anchor;
   }
 
   return std::nullopt;

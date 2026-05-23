@@ -12,6 +12,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -31,6 +32,7 @@
 #include "tsf/host/uia_text_policy.h"
 #include "tsf/candidate/candidate_list_ui.h"
 #include "tsf/service/text_service.h"
+#include "ui/composition/composition_window.h"
 
 namespace milkyway::tsf::langbar {
 class InputModeLangBarItem;
@@ -157,7 +159,12 @@ class TipTextService final : public ITfTextInputProcessorEx,
       TfEditCookie edit_cookie, ITfContext* context,
       const std::vector<edit::TextEditOperation>& operations);
   void ResetTransitoryDirectTextComposition(const wchar_t* reason);
+  HRESULT ApplyWindowOnlyComposition(
+      TfEditCookie edit_cookie, ITfContext* context,
+      const std::vector<edit::TextEditOperation>& operations);
+  void ResetWindowOnlyComposition(const wchar_t* reason);
   HRESULT ApplyUiaWholeValueComposition(
+      ITfContext* context,
       const std::vector<edit::TextEditOperation>& operations);
   void ResetUiaWholeValueComposition(const wchar_t* reason);
 
@@ -255,13 +262,14 @@ class TipTextService final : public ITfTextInputProcessorEx,
   HRESULT CommitCaretCandidate(const std::string& candidate_text,
                                ITfContext* context, ITfRange* range) const;
   std::optional<POINT> CandidateWindowAnchor(ITfContext* context) const;
+  std::optional<POINT> WindowOnlyCompositionAnchor(ITfContext* context) const;
   std::optional<RECT> CompositionTextRect(ITfContext* context) const;
   std::optional<RECT> SelectionCandidateTextRect(ITfContext* context) const;
   std::optional<RECT> CaretCandidateTextRect(ITfContext* context) const;
   HRESULT MoveSelectionToRangeEnd(TfEditCookie edit_cookie, ITfContext* context,
                                   ITfRange* range) const;
   void ResetTransitoryCompositionBridge(const wchar_t* reason);
-  void RefreshFocusedUiaTextTarget(const wchar_t* reason);
+  void RefreshFocusedUiaTextTarget(ITfContext* context, const wchar_t* reason);
   HRESULT ClearCompositionDisplayAttribute(TfEditCookie edit_cookie,
                                            ITfContext* context) const;
   HRESULT ApplyCompositionDisplayAttribute(TfEditCookie edit_cookie,
@@ -313,6 +321,8 @@ class TipTextService final : public ITfTextInputProcessorEx,
   edit::TransitoryCompositionBridge transitory_composition_bridge_;
   edit::TransitoryDirectTextComposition transitory_direct_text_;
   host::UiaWholeValueCompositionState uia_whole_value_composition_;
+  std::unique_ptr<ui::composition::CompositionWindow>
+      window_only_composition_window_;
   host::UiaFocusedTextTarget focused_uia_text_target_;
   bool has_focused_uia_text_target_ = false;
   edit::TsfTextEditSink edit_sink_;

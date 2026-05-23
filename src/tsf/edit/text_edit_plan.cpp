@@ -55,4 +55,41 @@ std::vector<PlannedEditAction> PlanTextEditActions(
   return plan;
 }
 
+WindowOnlyTextEditPlan PlanWindowOnlyTextEditActions(
+    const std::vector<TextEditOperation>& operations) {
+  std::string commit_text;
+  std::string preedit_text;
+  bool has_preedit = false;
+  bool end_requested = false;
+
+  for (const TextEditOperation& operation : operations) {
+    switch (operation.type) {
+      case TextEditOperationType::kCommitText:
+        commit_text += operation.text;
+        break;
+      case TextEditOperationType::kStartComposition:
+      case TextEditOperationType::kUpdateComposition:
+        preedit_text = operation.text;
+        has_preedit = true;
+        break;
+      case TextEditOperationType::kEndComposition:
+        end_requested = true;
+        break;
+    }
+  }
+
+  WindowOnlyTextEditPlan plan;
+  if (!commit_text.empty()) {
+    plan.host_actions.push_back(
+        PlannedEditAction{PlannedEditActionType::kCommitText, commit_text});
+  }
+  if (has_preedit && !preedit_text.empty()) {
+    plan.show_preedit = true;
+    plan.preedit_text = std::move(preedit_text);
+  } else if (end_requested) {
+    plan.hide_preedit = true;
+  }
+  return plan;
+}
+
 }  // namespace milkyway::tsf::edit

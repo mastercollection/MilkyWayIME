@@ -163,13 +163,19 @@ class WriteEditSession final : public ITfEditSession {
           L" fallback_to_tsf_plan=" +
           std::to_wstring(direct_hr == S_FALSE ? 1 : 0));
 #endif
-      if (direct_hr != S_FALSE) {
-        return direct_hr;
-      }
+    if (direct_hr != S_FALSE) {
+      return direct_hr;
+    }
+  }
+
+    const HRESULT window_only_hr =
+        host_->ApplyWindowOnlyComposition(edit_cookie, context_, operations_);
+    if (window_only_hr != S_FALSE) {
+      return window_only_hr;
     }
 
     const HRESULT uia_hr =
-        host_->ApplyUiaWholeValueComposition(operations_);
+        host_->ApplyUiaWholeValueComposition(context_, operations_);
     if (uia_hr != S_FALSE) {
       return uia_hr;
     }

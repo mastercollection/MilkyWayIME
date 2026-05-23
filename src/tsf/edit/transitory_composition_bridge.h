@@ -18,12 +18,15 @@ struct TransitoryCompositionBridgeTarget {
   std::wstring process_name;
   std::wstring view_class;
   bool is_transitory = false;
+  std::wstring focus_class;
+  std::wstring top_level_class;
 };
 
 struct TransitoryCompositionBridgeSnapshot {
   TransitoryCompositionBridgeTarget target;
   ITfContext* context = nullptr;
   HWND view_hwnd = nullptr;
+  HWND focus_hwnd = nullptr;
   bool internal_composing = false;
   bool has_tracked_tsf_composition = false;
   std::wstring preedit;
@@ -33,6 +36,7 @@ enum class TransitoryCompositionBridgeTargetKind {
   kNone,
   kObserveOnly,
   kSuppressEngineReset,
+  kUntrustedHostTermination,
 };
 
 TransitoryCompositionBridgeTargetKind

@@ -56,14 +56,16 @@ finally the Unity activation problem.
      only. Do not classify it as caret-preserving preedit support or an enabled
      runtime backend.
 3. WezTerm / `org.wezfurlong.wezterm`
-   - Purpose: negative baseline separating TSF `S_OK` from visible input
-     success.
+   - Purpose: crash-safety baseline separating TSF `S_OK` from verified visible
+     input success. WezTerm is still an intended Korean input target, but the
+     safe write path is not yet proven.
    - Confirm: top-level `ControlType=Window`, no caret HWND, transitory TSF
      context when present, immediate `OnCompositionTerminated`, and
      `TransitoryBridge[SuppressEngineReset]` when the MilkyWayIME debug path is
      observed.
    - Do not promote this host to UIA, native Edit/RichEdit, or IMM
      result-message support without new evidence of a real text surface.
+     Prefer preserving host stability over speculative text insertion.
 4. Nikke / Unity `UnityWndClass`
    - Purpose: separate MilkyWayIME activation/load retention from write-backend
      behavior.

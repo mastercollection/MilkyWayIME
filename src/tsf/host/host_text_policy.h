@@ -86,6 +86,11 @@ inline HostTextBackendPolicy SelectHostTextBackendPolicy(
   return HostTextBackendPolicy::kNone;
 }
 
+inline bool ShouldProbeRuntimeUiaTextBackend(const HostTextTarget& target) {
+  return SelectTextSurfaceFamily(target) ==
+         TextSurfaceFamily::kFrameworkAvalonia;
+}
+
 inline const wchar_t* TextSurfaceFamilyName(TextSurfaceFamily family) {
   switch (family) {
     case TextSurfaceFamily::kUnknown:
