@@ -31,6 +31,8 @@
 #include "tsf/diagnostics/host_diagnostics.h"
 #include "tsf/host/host_text_policy.h"
 #include "tsf/host/uia_text_policy.h"
+#include "tsf/service/composition_key_policy.h"
+#include "tsf/service/composition_surface.h"
 #include "tsf/service/text_service.h"
 #include "tsf/settings/user_settings.h"
 #include "ui/candidate/candidate_theme.h"
@@ -45,7 +47,12 @@ using milkyway::tsf::edit::TextEditOperationType;
 constexpr std::uint16_t kVkShift = 0x10;
 constexpr std::uint16_t kVkControl = 0x11;
 constexpr std::uint16_t kVkMenu = 0x12;
+constexpr std::uint16_t kVkTab = 0x09;
+constexpr std::uint16_t kVkReturn = 0x0D;
+constexpr std::uint16_t kVkEscape = 0x1B;
 constexpr std::uint16_t kVkSpace = 0x20;
+constexpr std::uint16_t kVkLeft = 0x25;
+constexpr std::uint16_t kVkDelete = 0x2E;
 constexpr std::uint16_t kVkLwin = 0x5B;
 
 struct RecordingEditSink final : milkyway::tsf::edit::TextEditSink {
@@ -1388,6 +1395,33 @@ void TestTextServiceShortcutAndTermination(
   }
 }
 
+void TestTextServiceCommitPendingPreeditAndEnd(
+    const milkyway::engine::layout::LayoutRegistry& registry) {
+  milkyway::engine::session::InputSession session(
+      registry.DefaultBaseLayout().id, registry.DefaultKoreanLayout().id);
+  RecordingEditSink sink;
+  milkyway::tsf::service::TextService service(
+      &session, milkyway::adapters::libhangul::CreateLibhangulComposer(),
+      &sink, &registry);
+
+  service.OnKeyEvent(Key('R'), {}, milkyway::engine::key::KeyTransition::kPressed);
+  service.OnKeyEvent(Key('L'), {}, milkyway::engine::key::KeyTransition::kPressed);
+  assert(session.IsComposing());
+  assert(session.snapshot().preedit == "\xEA\xB8\xB0");
+
+  const std::size_t operation_count = sink.operations.size();
+  assert(service.CommitPendingPreeditAndEnd(
+      milkyway::engine::session::CompositionEndReason::kShortcutBypass));
+  assert(!session.IsComposing());
+  assert(session.last_end_reason() ==
+         milkyway::engine::session::CompositionEndReason::kShortcutBypass);
+  assert(sink.operations.size() == operation_count + 2);
+  AssertOperation(sink.operations[operation_count],
+                  TextEditOperationType::kCommitText, "\xEA\xB8\xB0");
+  AssertOperation(sink.operations[operation_count + 1],
+                  TextEditOperationType::kEndComposition, "");
+}
+
 void TestTextServiceReplaceComposerForKoreanLayout(
     const milkyway::engine::layout::LayoutRegistry& registry) {
   milkyway::engine::session::InputSession session(
@@ -1841,6 +1875,64 @@ void TestHostTextPolicyClassifiesKnownTargets() {
   assert(std::wstring_view(HostTextPolicyName(
              HostTextBackendPolicy::kNativeRichEditSelectionReplace)) ==
          L"native_richedit_selection_replace");
+}
+
+void TestCompositionSurfaceExitPolicy() {
+  using milkyway::tsf::service::CompositionExitIntent;
+  using milkyway::tsf::service::CompositionSurfaceExitAction;
+  using milkyway::tsf::service::CompositionSurfaceKind;
+  using milkyway::tsf::service::DecideCompositionSurfaceExitAction;
+
+  assert(DecideCompositionSurfaceExitAction(
+             CompositionSurfaceKind::kOverlayOnly,
+             CompositionExitIntent::kAcceptAndForwardKey) ==
+         CompositionSurfaceExitAction::kCommitPendingPreeditAndEnd);
+  assert(DecideCompositionSurfaceExitAction(
+             CompositionSurfaceKind::kOverlayOnly,
+             CompositionExitIntent::kFocusTransfer) ==
+         CompositionSurfaceExitAction::kCommitPendingPreeditAndEnd);
+  assert(DecideCompositionSurfaceExitAction(
+             CompositionSurfaceKind::kTsfTracked,
+             CompositionExitIntent::kAcceptAndForwardKey) ==
+         CompositionSurfaceExitAction::kEndOnly);
+  assert(DecideCompositionSurfaceExitAction(
+             CompositionSurfaceKind::kTsfTracked,
+             CompositionExitIntent::kSelectionMovedOutsideComposition) ==
+         CompositionSurfaceExitAction::kEndOnly);
+  assert(DecideCompositionSurfaceExitAction(
+             CompositionSurfaceKind::kHostTextBacked,
+             CompositionExitIntent::kAcceptAndForwardKey) ==
+         CompositionSurfaceExitAction::kBackendFinalizeOnly);
+  assert(DecideCompositionSurfaceExitAction(
+             CompositionSurfaceKind::kOverlayOnly,
+             CompositionExitIntent::kExternalTermination) ==
+         CompositionSurfaceExitAction::kNone);
+  assert(DecideCompositionSurfaceExitAction(
+             CompositionSurfaceKind::kHostTextBacked,
+             CompositionExitIntent::kHostSelectionBackspaceBypass) ==
+         CompositionSurfaceExitAction::kResetOnly);
+}
+
+void TestCompositionKeyPolicy() {
+  using milkyway::tsf::service::IsCaretNavigationVirtualKey;
+  using milkyway::tsf::service::IsPlainAcceptAndForwardVirtualKey;
+  using milkyway::tsf::service::IsShiftHostEditingOrNavigationVirtualKey;
+
+  assert(IsPlainAcceptAndForwardVirtualKey(kVkReturn));
+  assert(IsPlainAcceptAndForwardVirtualKey(kVkTab));
+  assert(IsPlainAcceptAndForwardVirtualKey(kVkEscape));
+  assert(!IsPlainAcceptAndForwardVirtualKey(kVkSpace));
+  assert(!IsPlainAcceptAndForwardVirtualKey(kVkShift));
+
+  assert(IsCaretNavigationVirtualKey(kVkLeft));
+  assert(!IsCaretNavigationVirtualKey(kVkTab));
+  assert(!IsCaretNavigationVirtualKey(kVkEscape));
+
+  assert(IsShiftHostEditingOrNavigationVirtualKey(kVkLeft));
+  assert(IsShiftHostEditingOrNavigationVirtualKey(kVkTab));
+  assert(IsShiftHostEditingOrNavigationVirtualKey(kVkEscape));
+  assert(IsShiftHostEditingOrNavigationVirtualKey(kVkDelete));
+  assert(!IsShiftHostEditingOrNavigationVirtualKey(kVkSpace));
 }
 
 void TestUiaTextPolicyAllowsOnlyFluentSearchBox() {
@@ -2298,6 +2390,7 @@ int main() {
   TestTextServiceAutoReorder(registry);
   TestTextServicePrepareImeModeToggle(registry);
   TestTextServiceShortcutAndTermination(registry);
+  TestTextServiceCommitPendingPreeditAndEnd(registry);
   TestTextServiceReplaceComposerForKoreanLayout(registry);
   TestTextServiceShinsebeolLayout(registry);
   TestTextServiceShiftFinalSsangSios(registry);
@@ -2307,6 +2400,8 @@ int main() {
   TestTextEditPlanPreservesEmptyCompositionUpdateBeforeCompletion();
   TestTransitoryDirectTextCompositionGateAndPlan();
   TestHostTextPolicyClassifiesKnownTargets();
+  TestCompositionSurfaceExitPolicy();
+  TestCompositionKeyPolicy();
   TestUiaTextPolicyAllowsOnlyFluentSearchBox();
   TestUiaWholeValueCompositionStateAppendsAtEndOnly();
   TestWindowOnlyTextEditPlanSeparatesPreeditFromHostWrites();

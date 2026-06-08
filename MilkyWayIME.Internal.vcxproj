@@ -115,6 +115,8 @@
     <ClInclude Include="src\tsf\langbar\input_mode_lang_bar_item.h" />
     <ClInclude Include="src\tsf\registration\text_service_registration.h" />
     <ClInclude Include="src\tsf\service\module_state.h" />
+    <ClInclude Include="src\tsf\service\composition_key_policy.h" />
+    <ClInclude Include="src\tsf\service\composition_surface.h" />
     <ClInclude Include="src\tsf\service\text_service.h" />
     <ClInclude Include="src\tsf\service\tip_text_service.h" />
     <ClInclude Include="src\tsf\settings\user_layout_paths.h" />

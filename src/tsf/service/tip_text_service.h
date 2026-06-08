@@ -31,6 +31,7 @@
 #include "tsf/edit/tsf_text_edit_sink.h"
 #include "tsf/host/uia_text_policy.h"
 #include "tsf/candidate/candidate_list_ui.h"
+#include "tsf/service/composition_surface.h"
 #include "tsf/service/text_service.h"
 #include "ui/composition/composition_window.h"
 
@@ -203,6 +204,10 @@ class TipTextService final : public ITfTextInputProcessorEx,
       const engine::state::ModifierState& modifiers) const;
   bool ShouldBypassComposingForHostKey(
       WPARAM wparam, const engine::state::ModifierState& modifiers) const;
+  CompositionSurfaceKind CurrentCompositionSurfaceKind(ITfContext* context) const;
+  bool FinalizeCompositionSurface(ITfContext* context,
+                                  CompositionExitIntent intent,
+                                  const wchar_t* origin);
   void PrepareCompositionForHostBypass(ITfContext* context,
                                        const wchar_t* origin);
   void ResetCompositionForHostSelectionBackspace(const wchar_t* origin);

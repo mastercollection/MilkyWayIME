@@ -249,13 +249,37 @@ bool TextService::OnSelectionMovedOutsideComposition() {
 }
 
 bool TextService::PrepareHostBypass() {
+  return CommitPendingPreeditAndEnd(
+      engine::session::CompositionEndReason::kShortcutBypass);
+}
+
+bool TextService::EndCompositionOnly(
+    engine::session::CompositionEndReason reason) {
+  return EndActiveComposition(reason);
+}
+
+bool TextService::CommitPendingPreeditAndEnd(
+    engine::session::CompositionEndReason reason) {
   if (!session_->IsComposing()) {
     composer_->Reset();
     return false;
   }
 
-  return EndActiveComposition(
-      engine::session::CompositionEndReason::kShortcutBypass);
+  std::string commit_text;
+  if (composer_ != nullptr) {
+    commit_text = composer_->Flush();
+    composer_->Reset();
+  }
+  if (commit_text.empty()) {
+    commit_text = session_->snapshot().preedit;
+  }
+  if (!commit_text.empty()) {
+    edit_sink_->Apply(edit::TextEditOperation{
+        edit::TextEditOperationType::kCommitText, commit_text});
+  }
+
+  edit::EndCompositionEditSession edit_session(reason);
+  return edit_session.Apply(*session_, *edit_sink_);
 }
 
 bool TextService::ResetCompositionForHostSelection() {

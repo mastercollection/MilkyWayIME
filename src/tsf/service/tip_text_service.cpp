@@ -20,6 +20,7 @@
 #include "engine/layout/base_layout_json_loader.h"
 #include "tsf/edit/text_edit_plan.h"
 #include "tsf/langbar/input_mode_lang_bar_item.h"
+#include "tsf/service/composition_key_policy.h"
 #if defined(_DEBUG)
 #include "tsf/debug/debug_log.h"
 #endif
@@ -546,43 +547,6 @@ bool IsImeModeToggleVirtualKey(WPARAM wparam) {
 bool IsHanjaVirtualKey(WPARAM wparam) {
   const auto key = static_cast<std::uint16_t>(wparam);
   return key == VK_HANJA || key == VK_KANJI;
-}
-
-bool IsShiftSelectionOrNavigationVirtualKey(WPARAM wparam) {
-  switch (static_cast<std::uint16_t>(wparam)) {
-    case VK_LEFT:
-    case VK_RIGHT:
-    case VK_UP:
-    case VK_DOWN:
-    case VK_HOME:
-    case VK_END:
-    case VK_PRIOR:
-    case VK_NEXT:
-    case VK_INSERT:
-    case VK_DELETE:
-    case VK_BACK:
-    case VK_TAB:
-    case VK_ESCAPE:
-      return true;
-    default:
-      return false;
-  }
-}
-
-bool IsCaretNavigationVirtualKey(WPARAM wparam) {
-  switch (static_cast<std::uint16_t>(wparam)) {
-    case VK_LEFT:
-    case VK_RIGHT:
-    case VK_UP:
-    case VK_DOWN:
-    case VK_HOME:
-    case VK_END:
-    case VK_PRIOR:
-    case VK_NEXT:
-      return true;
-    default:
-      return false;
-  }
 }
 
 constexpr GUID kImeModePreservedKeyGuid = {
@@ -2319,7 +2283,9 @@ STDMETHODIMP TipTextService::Deactivate() {
 
   CloseCandidateList();
   if (session_.IsComposing() && text_edit_sink_context_ != nullptr) {
-    logic_.OnFocusLost();
+    FinalizeCompositionSurface(text_edit_sink_context_,
+                               CompositionExitIntent::kFocusTransfer,
+                               L"Deactivate");
     FlushPendingOperations(text_edit_sink_context_,
                            EditSessionRequestPolicy::kSyncPreferredWrite,
                            L"Deactivate");
@@ -2380,7 +2346,9 @@ STDMETHODIMP TipTextService::OnSetFocus(ITfDocumentMgr* focused,
     CloseCandidateList();
   }
   if (text_edit_sink_context_ != nullptr && session_.IsComposing()) {
-    logic_.OnFocusLost();
+    FinalizeCompositionSurface(text_edit_sink_context_,
+                               CompositionExitIntent::kFocusTransfer,
+                               L"OnSetFocus(DocumentMgr)");
     FlushPendingOperations(text_edit_sink_context_,
                            EditSessionRequestPolicy::kSyncPreferredWrite,
                            L"OnSetFocus(DocumentMgr)");
@@ -2454,7 +2422,9 @@ STDMETHODIMP TipTextService::OnEndEdit(ITfContext* context,
 
   if (!SelectionInsideComposition(context, read_cookie)) {
     CloseCandidateList();
-    logic_.OnSelectionMovedOutsideComposition();
+    FinalizeCompositionSurface(
+        context, CompositionExitIntent::kSelectionMovedOutsideComposition,
+        L"OnEndEdit");
     FlushPendingOperations(context, EditSessionRequestPolicy::kSyncPreferredWrite,
                            L"OnEndEdit");
   }
@@ -2916,9 +2886,10 @@ STDMETHODIMP TipTextService::OnKillThreadFocus() {
                   std::to_wstring(session_.IsComposing() ? 1 : 0));
 #endif
   CloseCandidateList();
-  if (transitory_direct_text_.IsActive() && text_edit_sink_context_ != nullptr &&
-      session_.IsComposing()) {
-    logic_.OnFocusLost();
+  if (text_edit_sink_context_ != nullptr && session_.IsComposing()) {
+    FinalizeCompositionSurface(text_edit_sink_context_,
+                               CompositionExitIntent::kFocusTransfer,
+                               L"OnKillThreadFocus");
     FlushPendingOperations(text_edit_sink_context_,
                            EditSessionRequestPolicy::kSyncPreferredWrite,
                            L"OnKillThreadFocus");
@@ -4164,7 +4135,8 @@ bool TipTextService::ShouldBypassComposingForHostKey(
     return false;
   }
 
-  if (static_cast<std::uint16_t>(wparam) == VK_RETURN) {
+  const auto virtual_key = static_cast<std::uint16_t>(wparam);
+  if (IsPlainAcceptAndForwardVirtualKey(virtual_key)) {
     return true;
   }
 
@@ -4172,11 +4144,85 @@ bool TipTextService::ShouldBypassComposingForHostKey(
     return true;
   }
 
-  if (IsCaretNavigationVirtualKey(wparam)) {
+  if (IsCaretNavigationVirtualKey(virtual_key)) {
     return true;
   }
 
-  return modifiers.shift && IsShiftSelectionOrNavigationVirtualKey(wparam);
+  return modifiers.shift &&
+         IsShiftHostEditingOrNavigationVirtualKey(virtual_key);
+}
+
+CompositionSurfaceKind TipTextService::CurrentCompositionSurfaceKind(
+    ITfContext* context) const {
+  if (!session_.IsComposing()) {
+    return CompositionSurfaceKind::kNone;
+  }
+
+  if (transitory_direct_text_.IsActive() ||
+      uia_whole_value_composition_.IsActive()) {
+    return CompositionSurfaceKind::kHostTextBacked;
+  }
+
+  if (window_only_composition_window_ != nullptr &&
+      window_only_composition_window_->IsShown()) {
+    return CompositionSurfaceKind::kOverlayOnly;
+  }
+
+  if (context != nullptr) {
+    const host::HostTextTarget host_target =
+        CaptureRuntimeUiaHostTextTarget(context);
+    if (host::SelectTextSurfaceFamily(host_target) ==
+        host::TextSurfaceFamily::kWindowOnly) {
+      return CompositionSurfaceKind::kOverlayOnly;
+    }
+  }
+
+  if (composition_ != nullptr) {
+    return CompositionSurfaceKind::kTsfTracked;
+  }
+
+  return CompositionSurfaceKind::kOverlayOnly;
+}
+
+bool TipTextService::FinalizeCompositionSurface(
+    ITfContext* context, CompositionExitIntent intent, const wchar_t* origin) {
+  const CompositionSurfaceKind surface = CurrentCompositionSurfaceKind(context);
+  const CompositionSurfaceExitAction action =
+      DecideCompositionSurfaceExitAction(surface, intent);
+  const engine::session::CompositionEndReason reason =
+      intent == CompositionExitIntent::kFocusTransfer
+          ? engine::session::CompositionEndReason::kFocusLost
+      : intent == CompositionExitIntent::kSelectionMovedOutsideComposition
+          ? engine::session::CompositionEndReason::kSelectionMoved
+      : intent == CompositionExitIntent::kHostSelectionBackspaceBypass
+          ? engine::session::CompositionEndReason::kSelectionMoved
+          : engine::session::CompositionEndReason::kShortcutBypass;
+
+#if defined(_DEBUG)
+  debug::DebugLog(
+      L"[MilkyWayIME][CompositionSurface][Finalize] origin=" +
+      std::wstring(origin != nullptr ? origin : L"<null>") +
+      L" surface=" + std::to_wstring(static_cast<int>(surface)) +
+      L" intent=" + std::to_wstring(static_cast<int>(intent)) +
+      L" action=" + std::to_wstring(static_cast<int>(action)) +
+      L" session_composing=" +
+      std::to_wstring(session_.IsComposing() ? 1 : 0) +
+      L" tracked_composition=" + PointerToString(composition_));
+#endif
+
+  switch (action) {
+    case CompositionSurfaceExitAction::kNone:
+      return false;
+    case CompositionSurfaceExitAction::kEndOnly:
+    case CompositionSurfaceExitAction::kBackendFinalizeOnly:
+      return logic_.EndCompositionOnly(reason);
+    case CompositionSurfaceExitAction::kCommitPendingPreeditAndEnd:
+      return logic_.CommitPendingPreeditAndEnd(reason);
+    case CompositionSurfaceExitAction::kResetOnly:
+      return logic_.ResetCompositionForHostSelection();
+  }
+
+  return false;
 }
 
 void TipTextService::PrepareCompositionForHostBypass(ITfContext* context,
@@ -4194,7 +4240,8 @@ void TipTextService::PrepareCompositionForHostBypass(ITfContext* context,
       std::to_wstring(transitory_composition_bridge_.IsActive() ? 1 : 0));
 #endif
 
-  logic_.PrepareHostBypass();
+  FinalizeCompositionSurface(context, CompositionExitIntent::kAcceptAndForwardKey,
+                             origin);
   if (edit_sink_.HasPendingOperations()) {
     if (context != nullptr) {
       const HRESULT hr = FlushPendingOperations(
@@ -4222,7 +4269,9 @@ void TipTextService::ResetCompositionForHostSelectionBackspace(
       L" transitory_direct_active=" +
       std::to_wstring(transitory_direct_text_.IsActive() ? 1 : 0));
 #endif
-  logic_.ResetCompositionForHostSelection();
+  FinalizeCompositionSurface(nullptr,
+                             CompositionExitIntent::kHostSelectionBackspaceBypass,
+                             origin);
   ResetTransitoryDirectTextComposition(origin);
   ResetTransitoryCompositionBridge(origin);
   ClearCompositionTracking();

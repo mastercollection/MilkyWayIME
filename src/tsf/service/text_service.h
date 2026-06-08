@@ -55,6 +55,9 @@ class TextService {
   bool OnFocusLost();
   bool OnSelectionMovedOutsideComposition();
   bool PrepareHostBypass();
+  bool EndCompositionOnly(engine::session::CompositionEndReason reason);
+  bool CommitPendingPreeditAndEnd(
+      engine::session::CompositionEndReason reason);
   bool ResetCompositionForHostSelection();
   void OnCompositionTerminated();
 #if defined(_DEBUG)
