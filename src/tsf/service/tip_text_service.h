@@ -44,6 +44,7 @@ namespace milkyway::tsf::service {
 enum class EditSessionRequestPolicy {
   kKeyPathWrite,
   kSyncPreferredWrite,
+  kAsyncWrite,
 };
 
 struct PendingKeyResult {
@@ -142,6 +143,8 @@ class TipTextService final : public ITfTextInputProcessorEx,
 
   TfClientId client_id() const;
   bool HasTrackedTsfComposition() const;
+  bool CanEditCompositionInContext(ITfContext* context) const;
+  void OnTextEditFailure(HRESULT result);
   HRESULT CommitText(TfEditCookie edit_cookie, ITfContext* context,
                      const std::wstring& text);
   HRESULT StartComposition(TfEditCookie edit_cookie, ITfContext* context,

@@ -10,6 +10,7 @@
 #include <msctf.h>
 
 #include <vector>
+#include <memory>
 
 #include "tsf/edit/text_edit_sink.h"
 
@@ -19,9 +20,12 @@ class TipTextService;
 
 namespace milkyway::tsf::edit {
 
+struct WriteSessionState;
+
 class TsfTextEditSink final : public TextEditSink {
  public:
   explicit TsfTextEditSink(service::TipTextService* host);
+  ~TsfTextEditSink() override;
 
   void Apply(const TextEditOperation& operation) override;
 
@@ -29,12 +33,13 @@ class TsfTextEditSink final : public TextEditSink {
   std::size_t PendingOperationCount() const;
   bool is_flushing() const;
   void ClearPendingOperations();
+  void InvalidatePendingEdits();
   HRESULT Flush(ITfContext* context, DWORD request_flags);
 
  private:
   service::TipTextService* host_ = nullptr;
   std::vector<TextEditOperation> pending_operations_;
-  bool flushing_ = false;
+  std::shared_ptr<WriteSessionState> state_;
 };
 
 }  // namespace milkyway::tsf::edit

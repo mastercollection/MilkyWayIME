@@ -6,6 +6,58 @@ before changing TSF, fallback input, or diagnostics behavior.
 For the manual capture commands and tool roles, see
 `docs/host-diagnostics-tools.md`.
 
+## TSF Edit Transaction Safety (2026-10-14)
+
+- Separate `RequestEditSession` acceptance from execution completion. A failed
+  request that never called `DoEditSession` retains its operations for retry;
+  `TF_S_ASYNC` transfers ownership to the accepted session, not to a retry.
+- Only `TF_E_SYNCHRONOUS` triggers the normal write queue's asynchronous retry.
+  Read-only rejection is not assumed to be transient. Once execution has begun,
+  failure may mean partial text delivery and must not replay the batch.
+- Move the submitted snapshot out of the pending queue before requesting a
+  session. Input enqueued reentrantly must not be removed with that snapshot.
+- While asynchronous work is outstanding, request later writes asynchronously
+  too, so synchronous writes cannot overtake the accepted work. `OnEndEdit`
+  requests asynchronous writes directly rather than requesting a forbidden
+  synchronous read/write lock first.
+- Context identity and a shared validity token bound delayed sessions to their
+  original lifetime. Detach, thread-focus loss, non-suppressed tracked composition
+  termination, and write failure invalidate dependent work. The execution guard
+  remains active during deferred execution and cleanup, including reentrant calls.
+- Detach attempts finalization of an already tracked TSF composition through a
+  separate edit session retaining that old composition and context. This session
+  cannot end a newer composition through the service's current-composition slot.
+  Ordinary queued preedit/commit operations invalidated at detach are cancelled,
+  not replayed into the new input target. Pending overlay commits may therefore
+  be lost on focus transfer if the original write could not finish in time.
+- A host response of `S_OK` with a null composition is rejection, not successful
+  input. Track an accepted composition before writing its text so termination
+  during the write cannot resurrect it. Ignore termination of untracked objects.
+- Debug diagnostics distinguish `EditSession.Completed`,
+  `EditSession.StaleContext`, `EditSession.FailedNoReplay`, and
+  `DetachedComposition.Request` / `DetachedComposition.End`. These new events
+  contain results, not input text. Existing text-bearing debug logs are unchanged.
+
+Deterministic COM test doubles in `tests/integration/edit_session_tests.cpp`
+exercise rejection/retry, asynchronous ordering and guard lifetime, reentrant
+enqueue, context invalidation, partial failure without replay, composition
+rejection, termination during `SetText`, stale termination, and delayed old
+composition finalization. They do not establish visible input success in games,
+UIA hosts, or the transitory DirectText backend. Existing backend classifications
+and previously rejected host experiments remain unchanged.
+
+Validation on 2026-10-14: Debug x64 and Win32 solution builds and both test
+executables passed using the installed VS 2022/v143 toolset override. The
+mid-batch cancellation test was observed failing before its execution-loop guard
+was corrected, then passed on both architectures. These are supplemental,
+non-admin results: the repository requires v145/admin MSBuild, v145 is not
+installed here, and the attempted UAC launch did not produce a build log before
+being interrupted. No IME registration or live application input was performed.
+
+API contracts:
+[RequestEditSession](https://learn.microsoft.com/en-us/windows/win32/api/msctf/nf-msctf-itfcontext-requesteditsession),
+[StartComposition](https://learn.microsoft.com/en-us/windows/win32/api/msctf/nf-msctf-itfcontextcomposition-startcomposition).
+
 ## Host Identity Normalization
 
 Normalize framework-generated window classes before making host compatibility
@@ -431,3 +483,61 @@ Do not retry:
   process.
 - The surface classification for this target is `window_only`; this is a
   capability exclusion, not a process-specific backend rule.
+
+### 2026-06-08 inline-composition investigation (do not repeat)
+
+Goal was true in-field inline composition in Nikke. Every lighter path was
+tried and empirically closed; decision is to keep the window-only overlay (B)
+and not pursue inline further without a fundamentally different approach.
+
+Activation (how MilkyWayIME TSF gets into `nikke.exe` at all):
+
+- Selecting the profile while Nikke is running does NOT load us; Nikke adopts
+  only the **default** input method at process start.
+- It loads only when MilkyWayIME is set as the **default input method override**
+  (Settings > Typing > Advanced keyboard settings) AND Nikke is restarted.
+  Confirmed via `tasklist /m mwime_tsf.dll` showing `nikke.exe` and per-process
+  `[pid=<nikke>]` lines in `%TEMP%\MilkyWayIME\debug.log` (our in-process logs
+  DO work in Nikke; only external `SetWindowsHookEx` tracing is blocked).
+
+TSF composition in Nikke (with MilkyWayIME loaded, overlay routing bypassed):
+
+- Nikke's focused context is transitory (`transitory=1`, no usable parent
+  document: `qi_document_mgr_hr=0x80004002`). The host fires
+  `OnCompositionTerminated` immediately after EVERY `StartComposition` edit
+  session (we do not end it - no `OnEndEdit`/finalize between), and it commits
+  the preedit as a result. Re-starting per keystroke therefore duplicates jamo
+  ("ㅇ아안안").
+- Preserving `composition_` across the suppressed termination and calling
+  `UpdateComposition` fails: `GetRange` on the terminated `ITfComposition`
+  returns `0x8000FFFF` (E_UNEXPECTED). A terminated composition cannot be
+  reused. MS IME keeps ONE composition for the whole syllable
+  (1×START / N×COMPOSITION(GCS_COMPSTR) / 1×END via Spy++), which we could not
+  reproduce in this transitory context.
+- Driving IMM directly from the TIP (`ImmGetContext` +
+  `ImmSetCompositionStringW`) fails: `ImmGetContext` succeeds but
+  `ImmSetCompositionString` is rejected (it is an IME-internal API; a TSF TIP /
+  client may not write the composition of a CUAS-owned IMC).
+
+Standalone IMM32 IME (H1) channel test:
+
+- A minimal IMM32 `.ime` (loads, `ImeProcessKey`/`ImeToAsciiEx`, force-open via
+  `ImmSetOpenStatus`/`ImmSetConversionStatus` in `ImeSelect`) works in ordinary
+  apps (emits a fixed char). It does NOT load into `nikke.exe`: no `nikke` pid
+  ever appears in `%TEMP%\MilkyWayIME\imm32_test.log`, even when selected active
+  before launch - same default-adoption wall as TSF.
+- `ImmInstallIME` only registers under English (0409) and the result is not a
+  default-input-override candidate; a hand-registered Korean KLID (HKLM only,
+  no per-user language-profile association) does not appear in the input list.
+  Making a minimal IME selectable as the Korean default needs production-grade
+  registration, and a shipped IMM32 IME would also be a SECOND visible
+  "MilkyWayIME" entry alongside the TSF TIP (different input-method models).
+- Reference projects carry no IMM32 `.ime` implementation (all TSF-only,
+  including mozc). MS IME itself ships no separate IMM32 IME; it is one TSF TIP
+  bridged to IMM apps by CUAS.
+
+Decision: Nikke stays `window_only` overlay (clean committed text via the
+CUAS result path + IME-owned overlay preedit). Improving the overlay anchor
+position (Gap 2) is the remaining worthwhile work; true inline is out of scope.
+Experiment scaffolding lives untracked under `src/imm32/`,
+`MilkyWayIME.Imm32*.vcxproj`.

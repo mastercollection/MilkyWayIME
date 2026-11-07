@@ -17,7 +17,22 @@
 #include "tsf/service/tip_text_service.h"
 
 namespace milkyway::tsf::edit {
+
+// Shared with accepted asynchronous sessions. The host keeps the sink alive,
+// but a detached context must not keep permission to edit a later composition.
+struct WriteSessionState {
+  ~WriteSessionState() { if (identity != nullptr) identity->Release(); }
+  IUnknown* identity = nullptr;
+  bool valid = true;
+  unsigned requests = 0;
+  std::shared_ptr<unsigned> executing = std::make_shared<unsigned>(0);
+};
+
 namespace {
+
+struct WriteSessionResult {
+  bool executed = false;
+};
 
 std::wstring FormatHex(std::uint32_t value) {
   wchar_t buffer[16] = {};
@@ -113,13 +128,18 @@ std::wstring JoinPlannedActionTypes(
 class WriteEditSession final : public ITfEditSession {
  public:
   WriteEditSession(service::TipTextService* host, ITfContext* context,
-                   std::vector<TextEditOperation> operations)
-      : host_(host), context_(context), operations_(std::move(operations)) {
+                   std::vector<TextEditOperation> operations,
+                   std::shared_ptr<WriteSessionState> state,
+                   std::shared_ptr<WriteSessionResult> result)
+      : host_(host), context_(context), operations_(std::move(operations)),
+        state_(std::move(state)), result_(std::move(result)) {
+    ++state_->requests;
     host_->AddRef();
     context_->AddRef();
   }
 
   ~WriteEditSession() {
+    --state_->requests;
     context_->Release();
     host_->Release();
   }
@@ -152,6 +172,34 @@ class WriteEditSession final : public ITfEditSession {
   }
 
   STDMETHODIMP DoEditSession(TfEditCookie edit_cookie) override {
+    if (result_->executed) return E_UNEXPECTED;
+    result_->executed = true;
+    if (!state_->valid) {
+#if defined(_DEBUG)
+      diagnostics::LogWriteProbe(L"EditSession.StaleContext", 0, E_ABORT);
+#endif
+      return E_ABORT;
+    }
+    ++*state_->executing;
+    const HRESULT execution_hr = Execute(edit_cookie);
+    const HRESULT hr = !state_->valid && SUCCEEDED(execution_hr)
+                           ? E_ABORT : execution_hr;
+#if defined(_DEBUG)
+    diagnostics::LogWriteProbe(L"EditSession.Completed", 0, hr);
+#endif
+    if (FAILED(hr) && state_->valid) {
+      state_->valid = false;
+      if (host_->CanEditCompositionInContext(context_)) {
+        host_->CompleteComposition(edit_cookie);
+      }
+      host_->OnTextEditFailure(hr);
+    }
+    --*state_->executing;
+    return hr;
+  }
+
+  HRESULT Execute(TfEditCookie edit_cookie) {
+    if (!host_->CanEditCompositionInContext(context_)) return E_ABORT;
     if (host_->ShouldUseTransitoryDirectTextComposition(context_, operations_)) {
       const HRESULT direct_hr =
           host_->ApplyTransitoryDirectTextComposition(edit_cookie, context_,
@@ -163,10 +211,10 @@ class WriteEditSession final : public ITfEditSession {
           L" fallback_to_tsf_plan=" +
           std::to_wstring(direct_hr == S_FALSE ? 1 : 0));
 #endif
-    if (direct_hr != S_FALSE) {
-      return direct_hr;
+      if (direct_hr != S_FALSE) {
+        return direct_hr;
+      }
     }
-  }
 
     const HRESULT window_only_hr =
         host_->ApplyWindowOnlyComposition(edit_cookie, context_, operations_);
@@ -202,6 +250,7 @@ class WriteEditSession final : public ITfEditSession {
 #endif
 
     for (const PlannedEditAction& action : plan) {
+      if (!state_->valid) return E_ABORT;
       HRESULT hr = S_OK;
 
       switch (action.type) {
@@ -233,15 +282,19 @@ class WriteEditSession final : public ITfEditSession {
   service::TipTextService* host_ = nullptr;
   ITfContext* context_ = nullptr;
   std::vector<TextEditOperation> operations_;
+  std::shared_ptr<WriteSessionState> state_;
+  std::shared_ptr<WriteSessionResult> result_;
 };
 
 HRESULT RequestWriteEditSession(service::TipTextService* host,
                                 ITfContext* context,
                                 std::vector<TextEditOperation> operations,
-                                DWORD request_flags, bool* flushing,
+                                DWORD request_flags,
+                                const std::shared_ptr<WriteSessionState>& state,
+                                const std::shared_ptr<WriteSessionResult>& result,
                                 HRESULT* session_hr,
                                 bool used_resolved_context) {
-  if (host == nullptr || context == nullptr || flushing == nullptr ||
+  if (host == nullptr || context == nullptr ||
       session_hr == nullptr) {
     return E_INVALIDARG;
   }
@@ -259,16 +312,17 @@ HRESULT RequestWriteEditSession(service::TipTextService* host,
 #endif
 
   WriteEditSession* edit_session =
-      new (std::nothrow) WriteEditSession(host, context, std::move(operations));
+      new (std::nothrow) WriteEditSession(host, context, std::move(operations),
+                                       state, result);
   if (edit_session == nullptr) {
     return E_OUTOFMEMORY;
   }
 
   *session_hr = E_FAIL;
-  *flushing = true;
+  ++*state->executing;
   const HRESULT hr = context->RequestEditSession(
       host->client_id(), edit_session, request_flags, session_hr);
-  *flushing = false;
+  --*state->executing;
 #if defined(_DEBUG)
   diagnostics::LogWriteProbe(L"RequestEditSession", total_text_length,
                              FAILED(hr) ? hr : *session_hr);
@@ -284,7 +338,10 @@ HRESULT RequestWriteEditSession(service::TipTextService* host,
 
 }  // namespace
 
-TsfTextEditSink::TsfTextEditSink(service::TipTextService* host) : host_(host) {}
+TsfTextEditSink::TsfTextEditSink(service::TipTextService* host)
+    : host_(host), state_(std::make_shared<WriteSessionState>()) {}
+
+TsfTextEditSink::~TsfTextEditSink() { state_->valid = false; }
 
 void TsfTextEditSink::Apply(const TextEditOperation& operation) {
   pending_operations_.push_back(operation);
@@ -305,16 +362,45 @@ std::size_t TsfTextEditSink::PendingOperationCount() const {
 }
 
 bool TsfTextEditSink::is_flushing() const {
-  return flushing_;
+  return *state_->executing != 0;
 }
 
 void TsfTextEditSink::ClearPendingOperations() {
   pending_operations_.clear();
 }
 
+void TsfTextEditSink::InvalidatePendingEdits() {
+  state_->valid = false;
+  pending_operations_.clear();
+  auto next = std::make_shared<WriteSessionState>();
+  next->executing = state_->executing;
+  state_ = std::move(next);
+}
+
 HRESULT TsfTextEditSink::Flush(ITfContext* context, DWORD request_flags) {
-  if (context == nullptr || pending_operations_.empty()) {
+  if (pending_operations_.empty()) {
     return S_OK;
+  }
+  if (context == nullptr) return E_INVALIDARG;
+  if (is_flushing()) return TF_E_SYNCHRONOUS;
+
+  IUnknown* identity = nullptr;
+  const HRESULT identity_hr = context->QueryInterface(
+      IID_IUnknown, reinterpret_cast<void**>(&identity));
+  if (FAILED(identity_hr)) return identity_hr;
+  if (!state_->valid || (state_->identity != nullptr && state_->identity != identity)) {
+    state_->valid = false;
+    auto next = std::make_shared<WriteSessionState>();
+    next->executing = state_->executing;
+    state_ = std::move(next);
+  }
+  if (state_->identity == nullptr) state_->identity = identity;
+  else identity->Release();
+  const auto state = state_;
+  const auto result = std::make_shared<WriteSessionResult>();
+  // TSF can execute synchronous requests ahead of accepted asynchronous work.
+  if (state->requests != 0) {
+    request_flags = (request_flags & ~(TF_ES_SYNC | TF_ES_ASYNCDONTCARE)) | TF_ES_ASYNC;
   }
 
 #if defined(_DEBUG)
@@ -324,7 +410,8 @@ HRESULT TsfTextEditSink::Flush(ITfContext* context, DWORD request_flags) {
                   FormatHex(static_cast<std::uint32_t>(request_flags)));
 #endif
 
-  std::vector<TextEditOperation> operations = pending_operations_;
+  std::vector<TextEditOperation> operations;
+  operations.swap(pending_operations_);
 
   ITfContext* request_context =
       host_->ResolveTransitoryDirectTextContext(context, operations);
@@ -346,11 +433,11 @@ HRESULT TsfTextEditSink::Flush(ITfContext* context, DWORD request_flags) {
 
   HRESULT session_hr = E_FAIL;
   HRESULT hr = RequestWriteEditSession(host_, request_context,
-                                       std::move(operations), request_flags,
-                                       &flushing_, &session_hr,
+                                       operations, request_flags,
+                                       state, result, &session_hr,
                                        used_resolved_context);
 
-  if (FAILED(hr) && used_resolved_context) {
+  if (FAILED(hr) && used_resolved_context && !result->executed && state->valid) {
 #if defined(_DEBUG)
     debug::DebugLog(
         L"[MilkyWayIME][EditSink::Flush][ResolvedContextRequestFailed] "
@@ -364,14 +451,18 @@ HRESULT TsfTextEditSink::Flush(ITfContext* context, DWORD request_flags) {
     request_context->Release();
     request_context = context;
     request_context->AddRef();
-    std::vector<TextEditOperation> fallback_operations = pending_operations_;
     session_hr = E_FAIL;
     hr = RequestWriteEditSession(host_, request_context,
-                                 std::move(fallback_operations), request_flags,
-                                 &flushing_, &session_hr, false);
+                                 operations, request_flags,
+                                 state, result, &session_hr, false);
   }
 
   request_context->Release();
+  const bool accepted = SUCCEEDED(hr) && SUCCEEDED(session_hr);
+  if (!result->executed && !accepted && state->valid) {
+    pending_operations_.insert(pending_operations_.begin(),
+                               operations.begin(), operations.end());
+  }
   if (FAILED(hr)) {
 #if defined(_DEBUG)
     debug::DebugLog(L"[MilkyWayIME][EditSink::Flush][RequestEditSessionFailed] "
@@ -383,7 +474,7 @@ HRESULT TsfTextEditSink::Flush(ITfContext* context, DWORD request_flags) {
                     L" session_hr=0x" +
                     FormatHex(static_cast<std::uint32_t>(session_hr)));
 #endif
-    return hr;
+    return result->executed ? E_FAIL : hr;
   }
 
 #if defined(_DEBUG)
@@ -398,8 +489,9 @@ HRESULT TsfTextEditSink::Flush(ITfContext* context, DWORD request_flags) {
   }
 #endif
 
-  pending_operations_.clear();
-  return session_hr;
+  // An executed batch may already have changed text. Never classify its failure
+  // as a lock rejection that the caller can safely retry.
+  return result->executed && FAILED(session_hr) ? E_FAIL : session_hr;
 }
 
 }  // namespace milkyway::tsf::edit

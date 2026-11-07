@@ -595,6 +595,42 @@ class EditSessionBase : public ITfEditSession {
   std::atomic<ULONG> ref_count_{1};
 };
 
+// Finalization retains only the old composition, never the service's mutable
+// current-composition slot. A delayed completion cannot end a new composition.
+class DetachedCompositionEndSession final : public EditSessionBase {
+ public:
+  DetachedCompositionEndSession(ITfComposition* composition, ITfContext* context)
+      : composition_(composition), context_(context) {
+    composition_->AddRef();
+    context_->AddRef();
+    DllAddRef();
+  }
+  ~DetachedCompositionEndSession() override {
+    composition_->Release();
+    context_->Release();
+    DllRelease();
+  }
+  STDMETHODIMP DoEditSession(TfEditCookie cookie) override {
+    ITfRange* range = nullptr;
+    ITfProperty* attribute = nullptr;
+    if (SUCCEEDED(composition_->GetRange(&range)) && range != nullptr &&
+        SUCCEEDED(context_->GetProperty(GUID_PROP_ATTRIBUTE, &attribute)) &&
+        attribute != nullptr) {
+      attribute->Clear(cookie, range);
+    }
+    SafeRelease(attribute);
+    SafeRelease(range);
+    const HRESULT hr = composition_->EndComposition(cookie);
+#if defined(_DEBUG)
+    diagnostics::LogWriteProbe(L"DetachedComposition.End", 0, hr);
+#endif
+    return hr;
+  }
+ private:
+  ITfComposition* composition_;
+  ITfContext* context_;
+};
+
 class TextExtentEditSession final : public EditSessionBase {
  public:
   TextExtentEditSession(ITfContextView* view, ITfRange* range,
@@ -1996,6 +2032,8 @@ const wchar_t* EditSessionRequestPolicyName(EditSessionRequestPolicy policy) {
       return L"KeyPathWrite";
     case EditSessionRequestPolicy::kSyncPreferredWrite:
       return L"SyncPreferredWrite";
+    case EditSessionRequestPolicy::kAsyncWrite:
+      return L"AsyncWrite";
   }
 
   return L"Unknown";
@@ -2003,6 +2041,9 @@ const wchar_t* EditSessionRequestPolicyName(EditSessionRequestPolicy policy) {
 
 DWORD RequestFlagsForPolicy(EditSessionRequestPolicy policy,
                             bool async_fallback = false) {
+  if (policy == EditSessionRequestPolicy::kAsyncWrite) {
+    return TF_ES_ASYNC | TF_ES_READWRITE;
+  }
   if (policy == EditSessionRequestPolicy::kKeyPathWrite || async_fallback) {
     return TF_ES_ASYNCDONTCARE | TF_ES_READWRITE;
   }
@@ -2425,7 +2466,7 @@ STDMETHODIMP TipTextService::OnEndEdit(ITfContext* context,
     FinalizeCompositionSurface(
         context, CompositionExitIntent::kSelectionMovedOutsideComposition,
         L"OnEndEdit");
-    FlushPendingOperations(context, EditSessionRequestPolicy::kSyncPreferredWrite,
+    FlushPendingOperations(context, EditSessionRequestPolicy::kAsyncWrite,
                            L"OnEndEdit");
   }
 
@@ -2779,6 +2820,9 @@ STDMETHODIMP TipTextService::OnPreservedKey(ITfContext* context, REFGUID rguid,
 
 STDMETHODIMP TipTextService::OnCompositionTerminated(TfEditCookie edit_cookie,
                                                      ITfComposition* composition) {
+  if (composition == nullptr || composition_ != composition) {
+    return S_OK;
+  }
   const bool tracked = composition_ == composition;
   ITfContext* termination_context =
       composition_context_ != nullptr ? composition_context_
@@ -2838,6 +2882,7 @@ STDMETHODIMP TipTextService::OnCompositionTerminated(TfEditCookie edit_cookie,
                                                             composition);
     }
     if (should_reset_engine) {
+      edit_sink_.InvalidatePendingEdits();
       ResetTransitoryCompositionBridge(L"OnCompositionTerminatedEngineReset");
       logic_.OnCompositionTerminated();
     } else {
@@ -2896,6 +2941,7 @@ STDMETHODIMP TipTextService::OnKillThreadFocus() {
   }
   ResetTransitoryDirectTextComposition(L"OnKillThreadFocus");
   ResetTransitoryCompositionBridge(L"OnKillThreadFocus");
+  DetachTextEditSink();
   return S_OK;
 }
 
@@ -3399,22 +3445,7 @@ HRESULT TipTextService::StartComposition(TfEditCookie edit_cookie,
       edit_cookie, insertion_range, static_cast<ITfCompositionSink*>(this),
       &composition);
   if (FAILED(hr) || composition == nullptr) {
-    goto Exit;
-  }
-
-  hr = composition->GetRange(&composition_range);
-  if (FAILED(hr)) {
-    goto Exit;
-  }
-
-  hr = composition_range->SetText(edit_cookie, 0, text.c_str(),
-                                  static_cast<LONG>(text.size()));
-  if (FAILED(hr)) {
-    goto Exit;
-  }
-
-  hr = MoveSelectionToRangeEnd(edit_cookie, context, composition_range);
-  if (FAILED(hr)) {
+    if (SUCCEEDED(hr)) hr = E_FAIL;
     goto Exit;
   }
 
@@ -3423,6 +3454,25 @@ HRESULT TipTextService::StartComposition(TfEditCookie edit_cookie,
   composition_->AddRef();
   composition_context_ = context;
   composition_context_->AddRef();
+
+  hr = composition->GetRange(&composition_range);
+  if (FAILED(hr)) {
+    goto Exit;
+  }
+
+  hr = composition_range->SetText(edit_cookie, 0, text.c_str(),
+                                  static_cast<LONG>(text.size()));
+  if (FAILED(hr) || composition_ != composition) {
+    if (SUCCEEDED(hr)) hr = E_ABORT;
+    goto Exit;
+  }
+
+  hr = MoveSelectionToRangeEnd(edit_cookie, context, composition_range);
+  if (FAILED(hr) || composition_ != composition) {
+    if (SUCCEEDED(hr)) hr = E_ABORT;
+    goto Exit;
+  }
+
   {
     const HRESULT attribute_hr =
         ApplyCompositionDisplayAttribute(edit_cookie, context, text);
@@ -3437,6 +3487,9 @@ HRESULT TipTextService::StartComposition(TfEditCookie edit_cookie,
   hr = S_OK;
 
 Exit:
+  if (FAILED(hr) && composition != nullptr && composition_ == composition) {
+    CompleteComposition(edit_cookie);
+  }
 #if defined(_DEBUG)
   diagnostics::LogWriteProbe(L"StartComposition.End", text.size(), hr);
   const edit::TransitoryCompositionBridgeSnapshot bridge_snapshot_end =
@@ -3966,8 +4019,31 @@ HRESULT TipTextService::AttachTextEditSink(ITfContext* context) {
 }
 
 void TipTextService::DetachTextEditSink() {
+  edit_sink_.InvalidatePendingEdits();
+  if (composition_ != nullptr && composition_context_ != nullptr) {
+    auto* end_session = new (std::nothrow)
+        DetachedCompositionEndSession(composition_, composition_context_);
+    ITfContext* old_context = composition_context_;
+    old_context->AddRef();
+    ClearCompositionTracking();
+    if (end_session != nullptr) {
+      HRESULT session_hr = E_FAIL;
+      const HRESULT request_hr = old_context->RequestEditSession(
+          client_id_, end_session, TF_ES_ASYNC | TF_ES_READWRITE, &session_hr);
+#if defined(_DEBUG)
+      diagnostics::LogWriteProbe(L"DetachedComposition.Request", 0,
+                                 FAILED(request_hr) ? request_hr : session_hr);
+#endif
+      end_session->Release();
+    }
+    old_context->Release();
+  }
+  ClearPendingKeyResult();
+  logic_.OnCompositionTerminated();
   ResetTransitoryDirectTextComposition(L"DetachTextEditSink");
   ResetTransitoryCompositionBridge(L"DetachTextEditSink");
+  ResetWindowOnlyComposition(L"DetachTextEditSink");
+  ResetUiaWholeValueComposition(L"DetachTextEditSink");
   ITfContext* previous_context = text_edit_sink_context_;
   const DWORD previous_cookie = text_edit_sink_cookie_;
   if (text_edit_sink_context_ != nullptr &&
@@ -4025,6 +4101,33 @@ void TipTextService::RemoveInputModeLanguageBarItem() {
   SafeRelease(input_mode_lang_bar_item_);
 }
 
+bool TipTextService::CanEditCompositionInContext(ITfContext* context) const {
+  if (composition_context_ == nullptr) return true;
+  IUnknown* current = nullptr;
+  IUnknown* requested = nullptr;
+  composition_context_->QueryInterface(IID_IUnknown, reinterpret_cast<void**>(&current));
+  if (context != nullptr)
+    context->QueryInterface(IID_IUnknown, reinterpret_cast<void**>(&requested));
+  const bool same = current != nullptr && current == requested;
+  SafeRelease(current);
+  SafeRelease(requested);
+  return same;
+}
+
+void TipTextService::OnTextEditFailure(HRESULT result) {
+#if defined(_DEBUG)
+  diagnostics::LogWriteProbe(L"EditSession.FailedNoReplay", 0, result);
+#else
+  (void)result;
+#endif
+  edit_sink_.InvalidatePendingEdits();
+  ResetTransitoryDirectTextComposition(L"EditSessionFailed");
+  ResetTransitoryCompositionBridge(L"EditSessionFailed");
+  ResetWindowOnlyComposition(L"EditSessionFailed");
+  ResetUiaWholeValueComposition(L"EditSessionFailed");
+  logic_.OnCompositionTerminated();
+}
+
 HRESULT TipTextService::FlushPendingOperations(ITfContext* context,
                                                EditSessionRequestPolicy policy,
                                                const wchar_t* origin) {
@@ -4033,7 +4136,7 @@ HRESULT TipTextService::FlushPendingOperations(ITfContext* context,
   LogDiagnosticsSnapshot(L"FlushPendingOperations.Begin", nullptr, context);
 #endif
   HRESULT hr = edit_sink_.Flush(context, request_flags);
-  if (FAILED(hr) && ShouldRetryAsync(hr) &&
+  if (hr == TF_E_SYNCHRONOUS &&
       policy == EditSessionRequestPolicy::kSyncPreferredWrite) {
     hr = edit_sink_.Flush(context, RequestFlagsForPolicy(policy, true));
   }
@@ -4059,7 +4162,7 @@ HRESULT TipTextService::FlushPendingOperations(ITfContext* context,
 #endif
     ResetTransitoryDirectTextComposition(L"FlushPendingOperationsFailed");
     ResetTransitoryCompositionBridge(L"FlushPendingOperationsFailed");
-    edit_sink_.ClearPendingOperations();
+    OnTextEditFailure(hr);
   }
   return hr;
 }

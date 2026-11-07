@@ -61,6 +61,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="tests\integration\tsf_runtime_tests.cpp" />
+    <ClCompile Include="tests\integration\edit_session_tests.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="MilkyWayIME.Internal.vcxproj">

@@ -161,7 +161,10 @@ void TestCandidateListUiElement() {
 
 }  // namespace
 
+void TestEditSessionTransactions();
+
 int main() {
+  TestEditSessionTransactions();
   TestClassFactoryAndInterfaces();
   TestCandidateListUiElement();
   return 0;
