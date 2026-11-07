@@ -30,6 +30,7 @@
 #include "tsf/edit/transitory_direct_text_composition.h"
 #include "tsf/diagnostics/host_diagnostics.h"
 #include "tsf/host/host_text_policy.h"
+#include "tsf/host/uia_caret_diagnostics.h"
 #include "tsf/host/uia_text_policy.h"
 #include "tsf/service/text_service.h"
 #include "tsf/settings/user_settings.h"
@@ -1909,6 +1910,56 @@ void TestUiaWholeValueCompositionStateAppendsAtEndOnly() {
   assert(!state.IsActive());
 }
 
+void TestUiaCaretDiagnosticPlanTargetsAfterSetValue() {
+  using milkyway::tsf::host::BuildUiaCaretDiagnosticPlan;
+  using milkyway::tsf::host::UiaCaretDiagnosticRequest;
+
+  UiaCaretDiagnosticRequest read_only;
+  read_only.try_uia_caret_end = true;
+  auto plan = BuildUiaCaretDiagnosticPlan(read_only);
+  assert(!plan.set_value);
+  assert(plan.try_uia_caret_end_before_set);
+  assert(!plan.reacquire_after_set);
+  assert(!plan.try_uia_caret_end_after_set);
+  assert(!plan.send_keyboard_end_after_set);
+
+  UiaCaretDiagnosticRequest after_set;
+  after_set.set_value = true;
+  after_set.try_uia_caret_end = true;
+  after_set.send_keyboard_end_after_set = true;
+  plan = BuildUiaCaretDiagnosticPlan(after_set);
+  assert(plan.set_value);
+  assert(!plan.try_uia_caret_end_before_set);
+  assert(plan.reacquire_after_set);
+  assert(plan.try_uia_caret_end_after_set);
+  assert(plan.send_keyboard_end_after_set);
+
+  UiaCaretDiagnosticRequest unsafe_keyboard_only;
+  unsafe_keyboard_only.send_keyboard_end_after_set = true;
+  plan = BuildUiaCaretDiagnosticPlan(unsafe_keyboard_only);
+  assert(!plan.set_value);
+  assert(!plan.reacquire_after_set);
+  assert(!plan.send_keyboard_end_after_set);
+
+  UiaCaretDiagnosticRequest unsafe_offset_only;
+  unsafe_offset_only.set_caret_after_set_offset = true;
+  unsafe_offset_only.caret_after_set_offset = 3;
+  plan = BuildUiaCaretDiagnosticPlan(unsafe_offset_only);
+  assert(!plan.set_value);
+  assert(!plan.reacquire_after_set);
+  assert(!plan.try_uia_caret_offset_after_set);
+
+  UiaCaretDiagnosticRequest after_set_offset;
+  after_set_offset.set_value = true;
+  after_set_offset.set_caret_after_set_offset = true;
+  after_set_offset.caret_after_set_offset = 3;
+  plan = BuildUiaCaretDiagnosticPlan(after_set_offset);
+  assert(plan.set_value);
+  assert(plan.reacquire_after_set);
+  assert(plan.try_uia_caret_offset_after_set);
+  assert(plan.caret_offset_after_set == 3);
+}
+
 void TestTransitoryCompositionBridgeGateAndState() {
   using milkyway::tsf::edit::GetTransitoryCompositionBridgeTargetKind;
   using milkyway::tsf::edit::ShouldSuppressTransitoryCompositionEngineReset;
@@ -2178,6 +2229,7 @@ int main() {
   TestHostTextPolicyClassifiesKnownTargets();
   TestUiaTextPolicyAllowsOnlyFluentSearchBox();
   TestUiaWholeValueCompositionStateAppendsAtEndOnly();
+  TestUiaCaretDiagnosticPlanTargetsAfterSetValue();
   TestTransitoryCompositionBridgeGateAndState();
   TestHostDiagnosticsClassifiesStableTarget();
   TestHostDiagnosticsClassifiesUnstablePopupTarget();

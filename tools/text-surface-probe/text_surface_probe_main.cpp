@@ -5,14 +5,20 @@
 #include <windows.h>
 #include <ole2.h>
 #include <UIAutomation.h>
+#include <oleacc.h>
 #include <richedit.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <cwchar>
 #include <iomanip>
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <string_view>
+#include <vector>
+
+#include "tsf/host/uia_caret_diagnostics.h"
 
 namespace {
 
@@ -75,9 +81,19 @@ struct Options {
   int sleep_ms = 0;
   bool help = false;
   bool redact_values = false;
+  bool set_value = false;
   bool uia_caret_end = false;
+  bool set_uia_caret_after_set_offset = false;
+  bool send_end_after_set = false;
   bool native_probe = false;
   bool native_replace_selection = false;
+  bool msaa_probe = false;
+  bool ime_caret_overlay_probe = false;
+  int uia_caret_after_set_offset = 0;
+  int overlay_ms = 3000;
+  int overlay_offset_x = 0;
+  int overlay_offset_y = 0;
+  std::wstring set_text = L"테스트";
   std::wstring native_text = L"테스트";
 };
 
@@ -88,6 +104,19 @@ bool ParseInt(const wchar_t* text, int* value) {
   wchar_t* end = nullptr;
   const long parsed = wcstol(text, &end, 10);
   if (end == text || *end != L'\0' || parsed < 0 || parsed > 60000) {
+    return false;
+  }
+  *value = static_cast<int>(parsed);
+  return true;
+}
+
+bool ParseSignedInt(const wchar_t* text, int* value) {
+  if (text == nullptr || value == nullptr) {
+    return false;
+  }
+  wchar_t* end = nullptr;
+  const long parsed = wcstol(text, &end, 10);
+  if (end == text || *end != L'\0' || parsed < -60000 || parsed > 60000) {
     return false;
   }
   *value = static_cast<int>(parsed);
@@ -106,13 +135,41 @@ Options ParseArgs(int argc, wchar_t** argv) {
       }
     } else if (arg == L"--redact-values") {
       options.redact_values = true;
+    } else if (arg == L"--set" && index + 1 < argc) {
+      options.set_value = true;
+      options.set_text = argv[++index];
     } else if (arg == L"--uia-caret-end") {
       options.uia_caret_end = true;
+    } else if (arg == L"--uia-caret-after-set-offset" &&
+               index + 1 < argc) {
+      options.set_uia_caret_after_set_offset = true;
+      if (!ParseInt(argv[++index], &options.uia_caret_after_set_offset)) {
+        options.help = true;
+      }
+    } else if (arg == L"--send-end-after-set" ||
+               arg == L"--keyboard-end-after-set") {
+      options.send_end_after_set = true;
     } else if (arg == L"--native-probe") {
       options.native_probe = true;
     } else if (arg == L"--native-replace-selection") {
       options.native_replace_selection = true;
       options.native_probe = true;
+    } else if (arg == L"--msaa-probe") {
+      options.msaa_probe = true;
+    } else if (arg == L"--ime-caret-overlay-probe") {
+      options.ime_caret_overlay_probe = true;
+    } else if (arg == L"--overlay-ms" && index + 1 < argc) {
+      if (!ParseInt(argv[++index], &options.overlay_ms)) {
+        options.help = true;
+      }
+    } else if (arg == L"--overlay-offset-x" && index + 1 < argc) {
+      if (!ParseSignedInt(argv[++index], &options.overlay_offset_x)) {
+        options.help = true;
+      }
+    } else if (arg == L"--overlay-offset-y" && index + 1 < argc) {
+      if (!ParseSignedInt(argv[++index], &options.overlay_offset_y)) {
+        options.help = true;
+      }
     } else if (arg == L"--text" && index + 1 < argc) {
       options.native_text = argv[++index];
     } else {
@@ -126,18 +183,64 @@ void PrintUsage() {
   std::wcout
       << L"Usage:\n"
       << L"  mwime_text_surface_probe.exe [--sleep ms] [--redact-values]\n"
-      << L"    [--uia-caret-end] [--native-probe]\n"
-      << L"    [--native-replace-selection --text text]\n\n"
+      << L"    [--set text] [--uia-caret-end]\n"
+      << L"    [--uia-caret-after-set-offset utf16_offset]\n"
+      << L"    [--send-end-after-set]\n"
+      << L"    [--native-probe]\n"
+      << L"    [--native-replace-selection --text text]\n"
+      << L"    [--msaa-probe]\n"
+      << L"    [--ime-caret-overlay-probe]\n"
+      << L"    [--overlay-ms ms]\n"
+      << L"    [--overlay-offset-x px] [--overlay-offset-y px]\n\n"
       << L"Default mode is read-only except normal UIA focus inspection.\n"
-      << L"--uia-caret-end may move the focused control caret.\n"
-      << L"--native-replace-selection sends EM_REPLACESEL to the native HWND.\n";
+      << L"--set changes the focused UIA ValuePattern value.\n"
+      << L"--uia-caret-end may move the focused control caret. With --set,\n"
+      << L"  it runs after SetValue() and focused-element reacquisition.\n"
+      << L"--uia-caret-after-set-offset moves the caret after SetValue().\n"
+      << L"--send-end-after-set sends a diagnostic VK_END after SetValue().\n"
+      << L"--native-replace-selection sends EM_REPLACESEL to the native HWND.\n"
+      << L"--msaa-probe inspects LegacyIAccessible and direct MSAA objects.\n"
+      << L"--ime-caret-overlay-probe shows a temporary diagnostic caret.\n";
 }
 
-void PrintValueField(const wchar_t* label, const std::wstring& value,
+milkyway::tsf::host::UiaCaretDiagnosticPlan BuildCaretPlan(
+    const Options& options) {
+  return milkyway::tsf::host::BuildUiaCaretDiagnosticPlan(
+      milkyway::tsf::host::UiaCaretDiagnosticRequest{
+          options.set_value,
+          options.uia_caret_end,
+          options.send_end_after_set,
+          options.set_uia_caret_after_set_offset,
+          options.uia_caret_after_set_offset,
+      });
+}
+
+void PrintCaretPlan(const milkyway::tsf::host::UiaCaretDiagnosticPlan& plan) {
+  std::wcout << L"caret_plan_set_value=" << BoolText(plan.set_value)
+             << L" caret_plan_uia_before_set="
+             << BoolText(plan.try_uia_caret_end_before_set)
+             << L" caret_plan_reacquire_after_set="
+             << BoolText(plan.reacquire_after_set)
+             << L" caret_plan_uia_after_set="
+             << BoolText(plan.try_uia_caret_end_after_set)
+             << L" caret_plan_uia_offset_after_set="
+             << BoolText(plan.try_uia_caret_offset_after_set)
+             << L" caret_plan_offset_after_set="
+             << plan.caret_offset_after_set
+             << L" caret_plan_keyboard_end_after_set="
+             << BoolText(plan.send_keyboard_end_after_set) << L"\n";
+}
+
+void PrintProbePhase(const wchar_t* phase) {
+  std::wcout << L"probe_phase=" << (phase != nullptr ? phase : L"unknown")
+             << L"\n";
+}
+
+void PrintValueField(std::wstring_view label, const std::wstring& value,
                      bool redact) {
-  std::wcout << label << L"_utf16_length=" << value.size();
+  std::wcout << std::wstring(label) << L"_utf16_length=" << value.size();
   if (!redact) {
-    std::wcout << L" " << label << L"=\"" << value << L"\"";
+    std::wcout << L" " << std::wstring(label) << L"=\"" << value << L"\"";
   }
   std::wcout << L"\n";
 }
@@ -256,7 +359,9 @@ void ProbeValuePattern(IUIAutomationElement* element, const Options& options) {
   const HRESULT pattern_hr = element->GetCurrentPatternAs(
       UIA_ValuePatternId, IID_PPV_ARGS(&value_pattern));
   std::wcout << L"value_pattern_hr=" << FormatHresult(pattern_hr)
-             << L" supported=" << BoolText(SUCCEEDED(pattern_hr)) << L"\n";
+             << L" supported="
+             << BoolText(SUCCEEDED(pattern_hr) && value_pattern != nullptr)
+             << L"\n";
   if (FAILED(pattern_hr) || value_pattern == nullptr) {
     return;
   }
@@ -289,12 +394,150 @@ long TextRangeLength(IUIAutomationTextRange* range) {
   return length;
 }
 
-void ProbeTextPattern(IUIAutomationElement* element, const Options& options) {
+void PrintTextRangeSummary(std::wstring_view label,
+                           IUIAutomationTextRange* range,
+                           const Options& options) {
+  if (range == nullptr) {
+    std::wcout << std::wstring(label) << L"_range_available=0\n";
+    return;
+  }
+
+  BSTR text = nullptr;
+  const HRESULT text_hr = range->GetText(512, &text);
+  const std::wstring value = BstrToString(text);
+  std::wcout << std::wstring(label) << L"_range_available=1 "
+             << std::wstring(label) << L"_get_hr=" << FormatHresult(text_hr)
+             << L" ";
+  PrintValueField(std::wstring(label) + L"_text", value,
+                  options.redact_values);
+  SysFreeString(text);
+}
+
+void PrintTextSelections(IUIAutomationTextPattern* text_pattern,
+                         const Options& options, std::wstring_view label) {
+  IUIAutomationTextRangeArray* selections = nullptr;
+  const HRESULT selection_hr = text_pattern->GetSelection(&selections);
+  std::wcout << std::wstring(label)
+             << L"_get_selection_hr=" << FormatHresult(selection_hr);
+  int selection_count = 0;
+  if (SUCCEEDED(selection_hr) && selections != nullptr) {
+    const HRESULT length_hr = selections->get_Length(&selection_count);
+    std::wcout << L" " << std::wstring(label)
+               << L"_selection_length_hr=" << FormatHresult(length_hr);
+    if (FAILED(length_hr)) {
+      selection_count = 0;
+    }
+  }
+  std::wcout << L" " << std::wstring(label)
+             << L"_selection_count=" << selection_count << L"\n";
+
+  if (SUCCEEDED(selection_hr) && selections != nullptr) {
+    for (int index = 0; index < selection_count; ++index) {
+      IUIAutomationTextRange* selection = nullptr;
+      if (SUCCEEDED(selections->GetElement(index, &selection)) &&
+          selection != nullptr) {
+        const std::wstring item_label =
+            std::wstring(label) + L"_selection_" + std::to_wstring(index);
+        PrintTextRangeSummary(item_label, selection, options);
+        selection->Release();
+      }
+    }
+  }
+  SafeRelease(selections);
+}
+
+HRESULT MoveTextPatternCaretToDocumentEnd(
+    IUIAutomationTextRange* document_range) {
+  if (document_range == nullptr) {
+    return E_INVALIDARG;
+  }
+
+  IUIAutomationTextRange* end_range = nullptr;
+  HRESULT hr = document_range->Clone(&end_range);
+  std::wcout << L"text_caret_end_clone_hr=" << FormatHresult(hr) << L"\n";
+  if (FAILED(hr) || end_range == nullptr) {
+    return FAILED(hr) ? hr : S_FALSE;
+  }
+
+  const HRESULT move_start_hr = end_range->MoveEndpointByRange(
+      TextPatternRangeEndpoint_Start, document_range,
+      TextPatternRangeEndpoint_End);
+  const HRESULT move_end_hr = end_range->MoveEndpointByRange(
+      TextPatternRangeEndpoint_End, document_range, TextPatternRangeEndpoint_End);
+  const HRESULT select_hr = end_range->Select();
+  std::wcout << L"text_caret_end_move_start_hr="
+             << FormatHresult(move_start_hr)
+             << L" text_caret_end_move_end_hr=" << FormatHresult(move_end_hr)
+             << L" text_caret_end_select_hr=" << FormatHresult(select_hr)
+             << L"\n";
+  end_range->Release();
+  return FAILED(move_start_hr) ? move_start_hr
+       : FAILED(move_end_hr)  ? move_end_hr
+                              : select_hr;
+}
+
+HRESULT MoveTextPatternCaretToOffset(IUIAutomationTextRange* document_range,
+                                     int offset) {
+  if (document_range == nullptr || offset < 0) {
+    return E_INVALIDARG;
+  }
+
+  std::wcout << L"text_caret_offset_requested=" << offset << L"\n";
+  IUIAutomationTextRange* offset_range = nullptr;
+  HRESULT hr = document_range->Clone(&offset_range);
+  std::wcout << L"text_caret_offset_clone_hr=" << FormatHresult(hr) << L"\n";
+  if (FAILED(hr) || offset_range == nullptr) {
+    return FAILED(hr) ? hr : S_FALSE;
+  }
+
+  const HRESULT move_end_to_start_hr = offset_range->MoveEndpointByRange(
+      TextPatternRangeEndpoint_End, document_range,
+      TextPatternRangeEndpoint_Start);
+  const HRESULT move_start_to_start_hr = offset_range->MoveEndpointByRange(
+      TextPatternRangeEndpoint_Start, document_range,
+      TextPatternRangeEndpoint_Start);
+  int moved = 0;
+  HRESULT move_hr = S_OK;
+  if (SUCCEEDED(move_end_to_start_hr) &&
+      SUCCEEDED(move_start_to_start_hr) && offset > 0) {
+    move_hr = offset_range->Move(TextUnit_Character, offset, &moved);
+  }
+  if (offset == 0) {
+    moved = 0;
+  }
+
+  HRESULT select_hr = S_FALSE;
+  if (SUCCEEDED(move_end_to_start_hr) &&
+      SUCCEEDED(move_start_to_start_hr) && SUCCEEDED(move_hr) &&
+      moved == offset) {
+    select_hr = offset_range->Select();
+  }
+  std::wcout << L"text_caret_offset_move_end_to_start_hr="
+             << FormatHresult(move_end_to_start_hr)
+             << L" text_caret_offset_move_start_to_start_hr="
+             << FormatHresult(move_start_to_start_hr)
+             << L" text_caret_offset_move_hr=" << FormatHresult(move_hr)
+             << L" text_caret_offset_moved=" << moved
+             << L" text_caret_offset_select_hr="
+             << FormatHresult(select_hr) << L"\n";
+  offset_range->Release();
+  return FAILED(move_end_to_start_hr) ? move_end_to_start_hr
+       : FAILED(move_start_to_start_hr) ? move_start_to_start_hr
+       : FAILED(move_hr) ? move_hr
+       : moved != offset ? S_FALSE
+                         : select_hr;
+}
+
+void ProbeTextPattern(IUIAutomationElement* element, const Options& options,
+                      bool try_caret_end, bool try_caret_offset,
+                      int caret_offset) {
   IUIAutomationTextPattern* text_pattern = nullptr;
   const HRESULT pattern_hr = element->GetCurrentPatternAs(
       UIA_TextPatternId, IID_PPV_ARGS(&text_pattern));
   std::wcout << L"text_pattern_hr=" << FormatHresult(pattern_hr)
-             << L" supported=" << BoolText(SUCCEEDED(pattern_hr)) << L"\n";
+             << L" supported="
+             << BoolText(SUCCEEDED(pattern_hr) && text_pattern != nullptr)
+             << L"\n";
   if (FAILED(pattern_hr) || text_pattern == nullptr) {
     return;
   }
@@ -320,62 +563,213 @@ void ProbeTextPattern(IUIAutomationElement* element, const Options& options) {
     SysFreeString(document_text);
   }
 
-  IUIAutomationTextRangeArray* selections = nullptr;
-  const HRESULT selection_hr = text_pattern->GetSelection(&selections);
-  std::wcout << L"text_get_selection_hr=" << FormatHresult(selection_hr);
-  int selection_count = 0;
-  if (SUCCEEDED(selection_hr) && selections != nullptr) {
-    const HRESULT length_hr = selections->get_Length(&selection_count);
-    std::wcout << L" text_selection_length_hr=" << FormatHresult(length_hr);
-    if (FAILED(length_hr)) {
-      selection_count = 0;
-    }
-  }
-  std::wcout << L" selection_count=" << selection_count;
-  std::wcout << L"\n";
+  PrintTextSelections(text_pattern, options, L"text");
 
-  if (SUCCEEDED(selection_hr) && selections != nullptr) {
-    for (int index = 0; index < selection_count; ++index) {
-      IUIAutomationTextRange* selection = nullptr;
-      if (SUCCEEDED(selections->GetElement(index, &selection)) && selection != nullptr) {
-        BSTR selected_text = nullptr;
-        const HRESULT selected_hr = selection->GetText(512, &selected_text);
-        const std::wstring selected = BstrToString(selected_text);
-        std::wcout << L"text_selection_" << index
-                   << L"_get_hr=" << FormatHresult(selected_hr) << L" ";
-        PrintValueField(L"text_selection", selected, options.redact_values);
-        SysFreeString(selected_text);
-        selection->Release();
-      }
-    }
-  }
-  SafeRelease(selections);
-
-  if (options.uia_caret_end && document_range != nullptr) {
-    IUIAutomationTextRange* end_range = nullptr;
-    HRESULT clone_hr = document_range->Clone(&end_range);
-    std::wcout << L"text_caret_end_clone_hr=" << FormatHresult(clone_hr)
+  if (try_caret_end && document_range != nullptr) {
+    const HRESULT caret_hr = MoveTextPatternCaretToDocumentEnd(document_range);
+    std::wcout << L"text_caret_end_overall_hr=" << FormatHresult(caret_hr)
                << L"\n";
-    if (SUCCEEDED(clone_hr) && end_range != nullptr) {
-      const HRESULT move_start_hr = end_range->MoveEndpointByRange(
-          TextPatternRangeEndpoint_Start, document_range,
-          TextPatternRangeEndpoint_End);
-      const HRESULT move_end_hr = end_range->MoveEndpointByRange(
-          TextPatternRangeEndpoint_End, document_range,
-          TextPatternRangeEndpoint_End);
-      const HRESULT select_hr = end_range->Select();
-      std::wcout << L"text_caret_end_move_start_hr="
-                 << FormatHresult(move_start_hr)
-                 << L" text_caret_end_move_end_hr="
-                 << FormatHresult(move_end_hr)
-                 << L" text_caret_end_select_hr=" << FormatHresult(select_hr)
-                 << L"\n";
-      end_range->Release();
-    }
+    PrintTextSelections(text_pattern, options, L"text_after_caret_end");
+  }
+
+  if (try_caret_offset && document_range != nullptr) {
+    const HRESULT caret_hr =
+        MoveTextPatternCaretToOffset(document_range, caret_offset);
+    std::wcout << L"text_caret_offset_overall_hr="
+               << FormatHresult(caret_hr) << L"\n";
+    PrintTextSelections(text_pattern, options, L"text_after_caret_offset");
   }
 
   SafeRelease(document_range);
   text_pattern->Release();
+}
+
+void ProbeTextPattern2(IUIAutomationElement* element, const Options& options) {
+  IUIAutomationTextPattern2* text_pattern2 = nullptr;
+  const HRESULT pattern_hr = element->GetCurrentPatternAs(
+      UIA_TextPattern2Id, IID_PPV_ARGS(&text_pattern2));
+  std::wcout << L"text2_pattern_hr=" << FormatHresult(pattern_hr)
+             << L" supported="
+             << BoolText(SUCCEEDED(pattern_hr) && text_pattern2 != nullptr)
+             << L"\n";
+  if (FAILED(pattern_hr) || text_pattern2 == nullptr) {
+    return;
+  }
+
+  BOOL is_active = FALSE;
+  IUIAutomationTextRange* caret_range = nullptr;
+  const HRESULT caret_hr =
+      text_pattern2->GetCaretRange(&is_active, &caret_range);
+  std::wcout << L"text2_get_caret_range_hr=" << FormatHresult(caret_hr)
+             << L" text2_caret_active=" << BoolText(is_active != FALSE)
+             << L"\n";
+  if (SUCCEEDED(caret_hr) && caret_range != nullptr) {
+    PrintTextRangeSummary(L"text2_caret", caret_range, options);
+    caret_range->Release();
+  }
+
+  text_pattern2->Release();
+}
+
+void ProbeTextEditPattern(IUIAutomationElement* element,
+                          const Options& options) {
+  IUIAutomationTextEditPattern* text_edit_pattern = nullptr;
+  const HRESULT pattern_hr = element->GetCurrentPatternAs(
+      UIA_TextEditPatternId, IID_PPV_ARGS(&text_edit_pattern));
+  std::wcout << L"text_edit_pattern_hr=" << FormatHresult(pattern_hr)
+             << L" supported="
+             << BoolText(SUCCEEDED(pattern_hr) && text_edit_pattern != nullptr)
+             << L"\n";
+  if (FAILED(pattern_hr) || text_edit_pattern == nullptr) {
+    return;
+  }
+
+  IUIAutomationTextRange* active_composition = nullptr;
+  const HRESULT active_hr =
+      text_edit_pattern->GetActiveComposition(&active_composition);
+  std::wcout << L"text_edit_active_composition_hr="
+             << FormatHresult(active_hr) << L"\n";
+  if (SUCCEEDED(active_hr) && active_composition != nullptr) {
+    PrintTextRangeSummary(L"text_edit_active_composition", active_composition,
+                          options);
+    active_composition->Release();
+  }
+
+  IUIAutomationTextRange* conversion_target = nullptr;
+  const HRESULT conversion_hr =
+      text_edit_pattern->GetConversionTarget(&conversion_target);
+  std::wcout << L"text_edit_conversion_target_hr="
+             << FormatHresult(conversion_hr) << L"\n";
+  if (SUCCEEDED(conversion_hr) && conversion_target != nullptr) {
+    PrintTextRangeSummary(L"text_edit_conversion_target", conversion_target,
+                          options);
+    conversion_target->Release();
+  }
+
+  text_edit_pattern->Release();
+}
+
+void ProbeLegacyIAccessiblePattern(IUIAutomationElement* element,
+                                   const Options& options) {
+  IUIAutomationLegacyIAccessiblePattern* legacy_pattern = nullptr;
+  const HRESULT pattern_hr = element->GetCurrentPatternAs(
+      UIA_LegacyIAccessiblePatternId, IID_PPV_ARGS(&legacy_pattern));
+  std::wcout << L"legacy_pattern_hr=" << FormatHresult(pattern_hr)
+             << L" supported="
+             << BoolText(SUCCEEDED(pattern_hr) && legacy_pattern != nullptr)
+             << L"\n";
+  if (FAILED(pattern_hr) || legacy_pattern == nullptr) {
+    return;
+  }
+
+  int child_id = 0;
+  const HRESULT child_hr = legacy_pattern->get_CurrentChildId(&child_id);
+  DWORD role = 0;
+  const HRESULT role_hr = legacy_pattern->get_CurrentRole(&role);
+  DWORD state = 0;
+  const HRESULT state_hr = legacy_pattern->get_CurrentState(&state);
+  std::wcout << L"legacy_child_id_hr=" << FormatHresult(child_hr)
+             << L" legacy_child_id=" << child_id
+             << L" legacy_role_hr=" << FormatHresult(role_hr)
+             << L" legacy_role=" << role
+             << L" legacy_state_hr=" << FormatHresult(state_hr)
+             << L" legacy_state=0x" << std::uppercase << std::hex << state
+             << std::dec << L"\n";
+
+  BSTR name = nullptr;
+  const HRESULT name_hr = legacy_pattern->get_CurrentName(&name);
+  std::wcout << L"legacy_name_hr=" << FormatHresult(name_hr) << L" ";
+  PrintValueField(L"legacy_name", BstrToString(name), options.redact_values);
+  SysFreeString(name);
+
+  BSTR value = nullptr;
+  const HRESULT value_hr = legacy_pattern->get_CurrentValue(&value);
+  std::wcout << L"legacy_value_hr=" << FormatHresult(value_hr) << L" ";
+  PrintValueField(L"legacy_value", BstrToString(value), options.redact_values);
+  SysFreeString(value);
+
+  BSTR default_action = nullptr;
+  const HRESULT default_action_hr =
+      legacy_pattern->get_CurrentDefaultAction(&default_action);
+  std::wcout << L"legacy_default_action_hr="
+             << FormatHresult(default_action_hr) << L" ";
+  PrintValueField(L"legacy_default_action", BstrToString(default_action),
+                  options.redact_values);
+  SysFreeString(default_action);
+
+  IAccessible* accessible = nullptr;
+  const HRESULT accessible_hr = legacy_pattern->GetIAccessible(&accessible);
+  std::wcout << L"legacy_get_iaccessible_hr="
+             << FormatHresult(accessible_hr)
+             << L" legacy_iaccessible_available="
+             << BoolText(SUCCEEDED(accessible_hr) && accessible != nullptr)
+             << L"\n";
+  SafeRelease(accessible);
+  legacy_pattern->Release();
+}
+
+HRESULT SetValuePattern(IUIAutomationElement* element, const Options& options) {
+  IUIAutomationValuePattern* value_pattern = nullptr;
+  HRESULT hr = element->GetCurrentPatternAs(UIA_ValuePatternId,
+                                            IID_PPV_ARGS(&value_pattern));
+  std::wcout << L"value_set_pattern_hr=" << FormatHresult(hr)
+             << L" value_set_supported="
+             << BoolText(SUCCEEDED(hr) && value_pattern != nullptr) << L"\n";
+  if (FAILED(hr) || value_pattern == nullptr) {
+    return FAILED(hr) ? hr : S_FALSE;
+  }
+
+  BOOL read_only = TRUE;
+  hr = value_pattern->get_CurrentIsReadOnly(&read_only);
+  std::wcout << L"value_set_readonly_hr=" << FormatHresult(hr)
+             << L" value_set_readonly=" << BoolText(read_only != FALSE)
+             << L"\n";
+  if (FAILED(hr) || read_only != FALSE) {
+    value_pattern->Release();
+    return FAILED(hr) ? hr : E_ACCESSDENIED;
+  }
+
+  BSTR value = SysAllocStringLen(options.set_text.data(),
+                                 static_cast<UINT>(options.set_text.size()));
+  if (value == nullptr && !options.set_text.empty()) {
+    value_pattern->Release();
+    return E_OUTOFMEMORY;
+  }
+  hr = value_pattern->SetValue(value);
+  SysFreeString(value);
+  value_pattern->Release();
+  std::wcout << L"value_set_hr=" << FormatHresult(hr)
+             << L" value_set_utf16_length=" << options.set_text.size()
+             << L"\n";
+  return hr;
+}
+
+HRESULT ReacquireFocusedElement(IUIAutomation* automation,
+                                IUIAutomationElement** focused) {
+  if (automation == nullptr || focused == nullptr) {
+    return E_INVALIDARG;
+  }
+  SafeRelease(*focused);
+  const HRESULT hr = automation->GetFocusedElement(focused);
+  std::wcout << L"focused_reacquire_hr=" << FormatHresult(hr) << L"\n";
+  return hr;
+}
+
+void SendKeyboardEndAfterSet() {
+  INPUT inputs[2] = {};
+  inputs[0].type = INPUT_KEYBOARD;
+  inputs[0].ki.wVk = VK_END;
+  inputs[1].type = INPUT_KEYBOARD;
+  inputs[1].ki.wVk = VK_END;
+  inputs[1].ki.dwFlags = KEYEVENTF_KEYUP;
+
+  SetLastError(ERROR_SUCCESS);
+  const UINT sent = SendInput(static_cast<UINT>(std::size(inputs)), inputs,
+                              static_cast<int>(sizeof(INPUT)));
+  const DWORD error = GetLastError();
+  std::wcout << L"keyboard_end_sendinput_count=" << sent
+             << L" keyboard_end_sendinput_error=0x" << std::uppercase
+             << std::hex << error << std::dec << L"\n";
 }
 
 void ProbeNative(HWND hwnd, const Options& options) {
@@ -422,6 +816,351 @@ void ProbeNative(HWND hwnd, const Options& options) {
   }
 }
 
+VARIANT ChildSelf() {
+  VARIANT child{};
+  VariantInit(&child);
+  child.vt = VT_I4;
+  child.lVal = CHILDID_SELF;
+  return child;
+}
+
+std::wstring VariantSummary(const VARIANT& value) {
+  std::wostringstream stream;
+  stream << L"vt=" << value.vt;
+  switch (value.vt) {
+    case VT_EMPTY:
+      stream << L",empty";
+      break;
+    case VT_I4:
+      stream << L",i4=" << value.lVal;
+      break;
+    case VT_DISPATCH:
+      stream << L",dispatch=" << BoolText(value.pdispVal != nullptr);
+      break;
+    case VT_UNKNOWN:
+      stream << L",unknown=" << BoolText(value.punkVal != nullptr);
+      break;
+    default:
+      break;
+  }
+  return stream.str();
+}
+
+std::wstring MsaaObjectName(LONG object_id) {
+  switch (object_id) {
+    case OBJID_CLIENT:
+      return L"client";
+    case OBJID_CARET:
+      return L"caret";
+    default:
+      return L"id:" + std::to_wstring(object_id);
+  }
+}
+
+void PrintMsaaStringField(const wchar_t* label, HRESULT hr, BSTR value,
+                          const Options& options) {
+  std::wcout << label << L"_hr=" << FormatHresult(hr) << L" ";
+  PrintValueField(label, BstrToString(value), options.redact_values);
+}
+
+void ProbeAccessibleObject(IAccessible* accessible,
+                           const std::wstring& label,
+                           const Options& options) {
+  if (accessible == nullptr) {
+    std::wcout << label << L"_available=0\n";
+    return;
+  }
+  std::wcout << label << L"_available=1\n";
+
+  long child_count = 0;
+  const HRESULT child_count_hr = accessible->get_accChildCount(&child_count);
+  std::wcout << label << L"_child_count_hr=" << FormatHresult(child_count_hr)
+             << L" " << label << L"_child_count=" << child_count << L"\n";
+
+  VARIANT self = ChildSelf();
+  BSTR name = nullptr;
+  const HRESULT name_hr = accessible->get_accName(self, &name);
+  PrintMsaaStringField((label + L"_name").c_str(), name_hr, name, options);
+  SysFreeString(name);
+
+  BSTR value = nullptr;
+  const HRESULT value_hr = accessible->get_accValue(self, &value);
+  PrintMsaaStringField((label + L"_value").c_str(), value_hr, value, options);
+  SysFreeString(value);
+
+  BSTR default_action = nullptr;
+  const HRESULT default_action_hr =
+      accessible->get_accDefaultAction(self, &default_action);
+  PrintMsaaStringField((label + L"_default_action").c_str(),
+                       default_action_hr, default_action, options);
+  SysFreeString(default_action);
+
+  VARIANT role{};
+  VariantInit(&role);
+  const HRESULT role_hr = accessible->get_accRole(self, &role);
+  std::wcout << label << L"_role_hr=" << FormatHresult(role_hr)
+             << L" " << label << L"_role=" << VariantSummary(role) << L"\n";
+  VariantClear(&role);
+
+  VARIANT state{};
+  VariantInit(&state);
+  const HRESULT state_hr = accessible->get_accState(self, &state);
+  std::wcout << label << L"_state_hr=" << FormatHresult(state_hr)
+             << L" " << label << L"_state=" << VariantSummary(state) << L"\n";
+  VariantClear(&state);
+
+  VARIANT focus{};
+  VariantInit(&focus);
+  const HRESULT focus_hr = accessible->get_accFocus(&focus);
+  std::wcout << label << L"_focus_hr=" << FormatHresult(focus_hr)
+             << L" " << label << L"_focus=" << VariantSummary(focus) << L"\n";
+  VariantClear(&focus);
+
+  VARIANT selection{};
+  VariantInit(&selection);
+  const HRESULT selection_hr = accessible->get_accSelection(&selection);
+  std::wcout << label << L"_selection_hr=" << FormatHresult(selection_hr)
+             << L" " << label << L"_selection=" << VariantSummary(selection)
+             << L"\n";
+  VariantClear(&selection);
+
+  long x = 0;
+  long y = 0;
+  long width = 0;
+  long height = 0;
+  const HRESULT location_hr =
+      accessible->accLocation(&x, &y, &width, &height, self);
+  std::wcout << label << L"_location_hr=" << FormatHresult(location_hr)
+             << L" " << label << L"_location=" << x << L"," << y << L","
+             << width << L"," << height << L"\n";
+}
+
+void ProbeMsaaObjectFromWindow(HWND hwnd, LONG object_id,
+                               const Options& options) {
+  std::wcout << L"msaa_object_hwnd=" << FormatHwnd(hwnd)
+             << L" msaa_object_id=" << MsaaObjectName(object_id) << L"\n";
+  if (hwnd == nullptr) {
+    std::wcout << L"msaa_object_available=0\n";
+    return;
+  }
+
+  IAccessible* accessible = nullptr;
+  const HRESULT hr = AccessibleObjectFromWindow(
+      hwnd, object_id, IID_IAccessible, reinterpret_cast<void**>(&accessible));
+  std::wcout << L"msaa_accessible_from_window_hr=" << FormatHresult(hr)
+             << L" msaa_accessible_available="
+             << BoolText(SUCCEEDED(hr) && accessible != nullptr) << L"\n";
+  if (SUCCEEDED(hr) && accessible != nullptr) {
+    const std::wstring label =
+        L"msaa_" + MsaaObjectName(object_id) + L"_" +
+        FormatHwnd(hwnd).substr(2);
+    ProbeAccessibleObject(accessible, label, options);
+  }
+  SafeRelease(accessible);
+}
+
+void AddUniqueHwnd(std::vector<HWND>* hwnds, HWND hwnd) {
+  if (hwnds == nullptr || hwnd == nullptr) {
+    return;
+  }
+  for (HWND existing : *hwnds) {
+    if (existing == hwnd) {
+      return;
+    }
+  }
+  hwnds->push_back(hwnd);
+}
+
+void ProbeMsaa(const WindowSnapshot& snapshot, HWND native_window,
+               const Options& options) {
+  std::vector<HWND> hwnds;
+  AddUniqueHwnd(&hwnds, snapshot.focus);
+  AddUniqueHwnd(&hwnds, native_window);
+  AddUniqueHwnd(&hwnds, snapshot.foreground);
+
+  std::wcout << L"msaa_probe_hwnd_count=" << hwnds.size() << L"\n";
+  for (HWND hwnd : hwnds) {
+    wchar_t class_name[256] = {};
+    GetClassNameW(hwnd, class_name, static_cast<int>(std::size(class_name)));
+    std::wcout << L"msaa_probe_hwnd=" << FormatHwnd(hwnd)
+               << L" msaa_probe_class=" << class_name << L"\n";
+    ProbeMsaaObjectFromWindow(hwnd, OBJID_CLIENT, options);
+    ProbeMsaaObjectFromWindow(hwnd, OBJID_CARET, options);
+  }
+}
+
+LRESULT CALLBACK OverlayCaretWindowProc(HWND hwnd, UINT message, WPARAM wparam,
+                                        LPARAM lparam) {
+  switch (message) {
+    case WM_PAINT: {
+      PAINTSTRUCT paint = {};
+      HDC dc = BeginPaint(hwnd, &paint);
+      if (dc != nullptr) {
+        RECT client_rect = {};
+        GetClientRect(hwnd, &client_rect);
+        HBRUSH brush = CreateSolidBrush(RGB(255, 0, 80));
+        if (brush != nullptr) {
+          FillRect(dc, &client_rect, brush);
+          DeleteObject(brush);
+        }
+        EndPaint(hwnd, &paint);
+      }
+      return 0;
+    }
+    case WM_ERASEBKGND:
+      return 1;
+    default:
+      break;
+  }
+  return DefWindowProcW(hwnd, message, wparam, lparam);
+}
+
+bool RegisterOverlayCaretWindowClass(HINSTANCE instance) {
+  constexpr wchar_t kClassName[] = L"MilkyWayTextSurfaceOverlayCaret";
+  WNDCLASSEXW window_class = {};
+  window_class.cbSize = sizeof(window_class);
+  window_class.lpfnWndProc = OverlayCaretWindowProc;
+  window_class.hInstance = instance;
+  window_class.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+  window_class.lpszClassName = kClassName;
+  const ATOM atom = RegisterClassExW(&window_class);
+  return atom != 0 || GetLastError() == ERROR_CLASS_ALREADY_EXISTS;
+}
+
+bool IsUsableRect(const RECT& rect) {
+  return rect.left != 0 || rect.top != 0 || rect.right != 0 ||
+         rect.bottom != 0;
+}
+
+bool TryMsaaCaretRect(HWND hwnd, RECT* rect) {
+  if (hwnd == nullptr || rect == nullptr) {
+    return false;
+  }
+  IAccessible* accessible = nullptr;
+  const HRESULT object_hr = AccessibleObjectFromWindow(
+      hwnd, static_cast<DWORD>(OBJID_CARET), IID_IAccessible,
+      reinterpret_cast<void**>(&accessible));
+  if (FAILED(object_hr) || accessible == nullptr) {
+    SafeRelease(accessible);
+    return false;
+  }
+
+  VARIANT self = ChildSelf();
+  long x = 0;
+  long y = 0;
+  long width = 0;
+  long height = 0;
+  const HRESULT location_hr =
+      accessible->accLocation(&x, &y, &width, &height, self);
+  SafeRelease(accessible);
+  if (FAILED(location_hr) || (x == 0 && y == 0 && width == 0 && height == 0)) {
+    return false;
+  }
+
+  rect->left = x;
+  rect->top = y;
+  rect->right = x + std::max<LONG>(width, 2);
+  rect->bottom = y + std::max<LONG>(height, 18);
+  return true;
+}
+
+bool TryGuiCaretRect(const WindowSnapshot& snapshot, RECT* rect) {
+  if (rect == nullptr || snapshot.caret == nullptr ||
+      !IsUsableRect(snapshot.gui.rcCaret)) {
+    return false;
+  }
+
+  POINT top_left{snapshot.gui.rcCaret.left, snapshot.gui.rcCaret.top};
+  POINT bottom_right{snapshot.gui.rcCaret.right, snapshot.gui.rcCaret.bottom};
+  if (!ClientToScreen(snapshot.caret, &top_left) ||
+      !ClientToScreen(snapshot.caret, &bottom_right)) {
+    return false;
+  }
+  rect->left = top_left.x;
+  rect->top = top_left.y;
+  rect->right = std::max(top_left.x + 2, bottom_right.x);
+  rect->bottom = std::max(top_left.y + 18, bottom_right.y);
+  return true;
+}
+
+bool TryFocusedElementRect(IUIAutomationElement* focused, RECT* rect) {
+  if (focused == nullptr || rect == nullptr) {
+    return false;
+  }
+  RECT bounds = {};
+  const HRESULT bounds_hr = focused->get_CurrentBoundingRectangle(&bounds);
+  if (FAILED(bounds_hr) || !IsUsableRect(bounds)) {
+    return false;
+  }
+  rect->left = bounds.left + 6;
+  rect->right = rect->left + 2;
+  rect->bottom = bounds.bottom - 6;
+  rect->top = rect->bottom - 20;
+  return true;
+}
+
+RECT NormalizeOverlayRect(RECT rect, const Options& options) {
+  rect.left += options.overlay_offset_x;
+  rect.right += options.overlay_offset_x;
+  rect.top += options.overlay_offset_y;
+  rect.bottom += options.overlay_offset_y;
+
+  const LONG width = std::max<LONG>(2, rect.right - rect.left);
+  const LONG height = std::max<LONG>(18, rect.bottom - rect.top);
+  rect.right = rect.left + width;
+  rect.bottom = rect.top + height;
+  return rect;
+}
+
+void RunImeCaretOverlayProbe(const WindowSnapshot& snapshot,
+                             IUIAutomationElement* focused,
+                             const Options& options) {
+  RECT rect = {};
+  const wchar_t* source = L"none";
+  if (TryMsaaCaretRect(snapshot.focus, &rect) ||
+      TryMsaaCaretRect(snapshot.foreground, &rect)) {
+    source = L"msaa_caret";
+  } else if (TryGuiCaretRect(snapshot, &rect)) {
+    source = L"gui_caret";
+  } else if (TryFocusedElementRect(focused, &rect)) {
+    source = L"focused_element_bounds";
+  } else {
+    std::wcout << L"overlay_caret_available=0 overlay_caret_source=none\n";
+    return;
+  }
+
+  rect = NormalizeOverlayRect(rect, options);
+  std::wcout << L"overlay_caret_available=1 overlay_caret_source=" << source
+             << L" overlay_caret_rect=" << RectText(rect)
+             << L" overlay_caret_ms=" << options.overlay_ms << L"\n";
+
+  HINSTANCE instance = GetModuleHandleW(nullptr);
+  constexpr wchar_t kClassName[] = L"MilkyWayTextSurfaceOverlayCaret";
+  if (!RegisterOverlayCaretWindowClass(instance)) {
+    std::wcout << L"overlay_register_error=0x" << std::uppercase << std::hex
+               << GetLastError() << std::dec << L"\n";
+    return;
+  }
+
+  HWND hwnd = CreateWindowExW(
+      WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, kClassName, L"",
+      WS_POPUP, rect.left, rect.top, rect.right - rect.left,
+      rect.bottom - rect.top, nullptr, nullptr, instance, nullptr);
+  std::wcout << L"overlay_create_hwnd=" << FormatHwnd(hwnd)
+             << L" overlay_create_error=0x" << std::uppercase << std::hex
+             << (hwnd == nullptr ? GetLastError() : ERROR_SUCCESS) << std::dec
+             << L"\n";
+  if (hwnd == nullptr) {
+    return;
+  }
+
+  ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+  UpdateWindow(hwnd);
+  Sleep(static_cast<DWORD>(options.overlay_ms));
+  DestroyWindow(hwnd);
+  std::wcout << L"overlay_destroyed=1\n";
+}
+
 }  // namespace
 
 int wmain(int argc, wchar_t** argv) {
@@ -433,6 +1172,8 @@ int wmain(int argc, wchar_t** argv) {
     PrintUsage();
     return 1;
   }
+  const milkyway::tsf::host::UiaCaretDiagnosticPlan caret_plan =
+      BuildCaretPlan(options);
 
   if (options.sleep_ms > 0) {
     Sleep(static_cast<DWORD>(options.sleep_ms));
@@ -460,17 +1201,74 @@ int wmain(int argc, wchar_t** argv) {
   IUIAutomationElement* focused = nullptr;
   const HRESULT focus_hr = automation->GetFocusedElement(&focused);
   std::wcout << L"focused_element_hr=" << FormatHresult(focus_hr) << L"\n";
+  PrintCaretPlan(caret_plan);
 
   HWND native_window = nullptr;
   if (SUCCEEDED(focus_hr) && focused != nullptr) {
+    PrintProbePhase(L"before_set");
     PrintElementInfo(focused, options, &native_window);
     ProbeValuePattern(focused, options);
-    ProbeTextPattern(focused, options);
+    ProbeTextPattern(focused, options,
+                     caret_plan.try_uia_caret_end_before_set, false, 0);
+    ProbeTextPattern2(focused, options);
+    ProbeTextEditPattern(focused, options);
+    if (options.msaa_probe) {
+      ProbeLegacyIAccessiblePattern(focused, options);
+    }
+  }
+
+  HRESULT set_hr = S_FALSE;
+  if (caret_plan.set_value && focused != nullptr) {
+    set_hr = SetValuePattern(focused, options);
+    if (caret_plan.reacquire_after_set && set_hr == S_OK) {
+      Sleep(100);
+      const HRESULT reacquire_hr = ReacquireFocusedElement(automation, &focused);
+      if (SUCCEEDED(reacquire_hr) && focused != nullptr) {
+        PrintProbePhase(L"after_set_reacquire");
+        PrintElementInfo(focused, options, &native_window);
+        ProbeValuePattern(focused, options);
+        ProbeTextPattern(focused, options,
+                         caret_plan.try_uia_caret_end_after_set,
+                         caret_plan.try_uia_caret_offset_after_set,
+                         caret_plan.caret_offset_after_set);
+        ProbeTextPattern2(focused, options);
+        ProbeTextEditPattern(focused, options);
+        if (options.msaa_probe) {
+          ProbeLegacyIAccessiblePattern(focused, options);
+        }
+      }
+    }
+  }
+
+  if (caret_plan.send_keyboard_end_after_set && set_hr == S_OK) {
+    SendKeyboardEndAfterSet();
+    Sleep(100);
+    const HRESULT reacquire_hr = ReacquireFocusedElement(automation, &focused);
+    if (SUCCEEDED(reacquire_hr) && focused != nullptr) {
+      PrintProbePhase(L"after_keyboard_end");
+      PrintElementInfo(focused, options, &native_window);
+      ProbeValuePattern(focused, options);
+      ProbeTextPattern(focused, options, false, false, 0);
+      ProbeTextPattern2(focused, options);
+      ProbeTextEditPattern(focused, options);
+      if (options.msaa_probe) {
+        ProbeLegacyIAccessiblePattern(focused, options);
+      }
+    }
   }
 
   if (options.native_probe) {
     HWND target = native_window != nullptr ? native_window : snapshot.focus;
     ProbeNative(target, options);
+  }
+
+  if (options.msaa_probe) {
+    ProbeMsaa(snapshot, native_window, options);
+  }
+
+  if (options.ime_caret_overlay_probe) {
+    const WindowSnapshot overlay_snapshot = CaptureWindowSnapshot();
+    RunImeCaretOverlayProbe(overlay_snapshot, focused, options);
   }
 
   SafeRelease(focused);

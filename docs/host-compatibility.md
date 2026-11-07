@@ -135,6 +135,19 @@ Confirmed working path:
 - `mwime_text_surface_probe.exe --uia-caret-end` did not visibly restore or move
   the FluentSearch caret. No native child HWND is exposed for Win32
   `EM_GETSEL`/`EM_REPLACESEL` probing.
+- The original `--uia-caret-end` probe did not include after-`SetValue()`
+  focused element reacquisition, `TextPattern2.GetCaretRange()`,
+  `TextEditPattern`, or a navigation-only `End` probe. Use the extended
+  `mwime_text_surface_probe.exe` flow in `docs/host-diagnostics-tools.md`
+  before changing runtime caret policy.
+- The `--set "테스트" --uia-caret-after-set-offset 3` probe was tested against
+  FluentSearch. The value was written, but the visible caret still stayed at the
+  beginning of the search box. UIA `TextPattern` offset selection is therefore
+  not a working FluentSearch caret-follow path.
+- The runtime `ValuePattern.SetValue()` backend must not attempt this UIA
+  caret restoration path. It also must not fall back to TSF insertion for the
+  same edit operation because that can duplicate text or re-enter a known
+  invisible write path.
 - This should be treated as a host-specific backend, not evidence that TSF or
   SendInput is viable.
 
@@ -156,9 +169,20 @@ Next direction:
   element matches the `SearchTextBox` identity above and the operation can
   tolerate whole-value replacement.
 - Treat `ValuePattern.SetValue()` as a whole-value replacement fallback. It is
-  not a caret-preserving preedit update path for FluentSearch.
+  not a caret-following or caret-preserving edit backend for FluentSearch.
 - Do not use this path for middle-of-text insertion, selection replacement, or
-  caret-preserving Korean preedit.
+  composition-string-internal caret editing.
+- Do not promote a caret workaround from HRESULTs alone. Require visible
+  insertion-position confirmation after manual ASCII input following
+  `--set ... --uia-caret-after-set-offset`, `--set ... --uia-caret-end`, or
+  `--set ... --send-end-after-set`.
+- The next allowed caret diagnostic is the read-only MSAA/IAccessible probe
+  documented in `docs/host-diagnostics-tools.md`. Treat `OBJID_CLIENT` or
+  `OBJID_CARET` object acquisition as diagnostic evidence only; standard MSAA
+  does not by itself provide a text-offset caret movement backend.
+- A separate IME-rendered caret overlay may be tested only as a visual
+  diagnostic. It must be recorded separately from host caret movement because
+  it does not change FluentSearch's real caret, selection, or insertion point.
 
 ## WezTerm
 

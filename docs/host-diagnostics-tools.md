@@ -141,8 +141,8 @@ selection-replacement surface such as `Edit` or `RICHEDIT50W`.
 ## Text Surface Probe
 
 Use this after `SetValue()` succeeds but appears to replace the whole value or
-move the caret. The default command is read-only and reports UIA selection
-support plus any native HWND identity.
+move the caret. The default command is read-only and reports UIA selection,
+`TextPattern2`, `TextEditPattern`, and native HWND identity.
 
 ```bat
 D:\Git\MilkyWayIME\build\MilkyWayIME.Tools.TextSurfaceProbe\x64\Debug\mwime_text_surface_probe.exe --sleep 3000 --redact-values
@@ -154,6 +154,86 @@ the target input is focused. This may change the caret position.
 ```bat
 D:\Git\MilkyWayIME\build\MilkyWayIME.Tools.TextSurfaceProbe\x64\Debug\mwime_text_surface_probe.exe --sleep 3000 --uia-caret-end --redact-values
 ```
+
+To test the FluentSearch/Avalonia failure mode directly, combine whole-value
+replacement with after-write caret restoration. The tool writes the value,
+reacquires the focused UIA element, then tries to move the UIA text selection to
+the document end.
+
+```bat
+D:\Git\MilkyWayIME\build\MilkyWayIME.Tools.TextSurfaceProbe\x64\Debug\mwime_text_surface_probe.exe --sleep 3000 --set "테스트" --uia-caret-end --redact-values
+```
+
+To test the runtime caret-follow strategy more directly, move the UIA selection
+to a specific UTF-16 offset after `SetValue()`. For the value `테스트`, offset
+`3` is the end of the search string.
+
+```bat
+D:\Git\MilkyWayIME\build\MilkyWayIME.Tools.TextSurfaceProbe\x64\Debug\mwime_text_surface_probe.exe --sleep 3000 --set "테스트" --uia-caret-after-set-offset 3 --redact-values
+```
+
+After the command, type one ordinary ASCII character manually in the focused
+input. Record whether the character appears as `테스트x` or whether it appears
+at the beginning. If offset `3` works, an optional offset `1` probe can separate
+real offset control from an end-only behavior.
+
+```bat
+D:\Git\MilkyWayIME\build\MilkyWayIME.Tools.TextSurfaceProbe\x64\Debug\mwime_text_surface_probe.exe --sleep 3000 --set "테스트" --uia-caret-after-set-offset 1 --redact-values
+```
+
+If UIA caret movement still does not visibly work, run the separate
+navigation-only `End` probe. This is not a text `SendInput` backend; it is only
+a diagnostic check for whether the host accepts caret navigation after
+`ValuePattern.SetValue()`.
+
+```bat
+D:\Git\MilkyWayIME\build\MilkyWayIME.Tools.TextSurfaceProbe\x64\Debug\mwime_text_surface_probe.exe --sleep 3000 --set "테스트" --send-end-after-set --redact-values
+```
+
+For all caret probes, treat API success, reported UIA caret range, and visible
+insertion position as separate facts.
+
+To inspect the MSAA/IAccessible surface, use `--msaa-probe`. This is read-only:
+it compares UIA `LegacyIAccessiblePattern` with direct
+`AccessibleObjectFromWindow()` results for `OBJID_CLIENT` and `OBJID_CARET`.
+
+```bat
+D:\Git\MilkyWayIME\.worktrees\fluent-caret-diagnostics\build\MilkyWayIME.Tools.TextSurfaceProbe\x64\Debug\mwime_text_surface_probe.exe --sleep 3000 --msaa-probe --redact-values
+```
+
+If `SetValue()` changes the FluentSearch value but the visible caret remains
+wrong, compare the post-write MSAA state as well.
+
+```bat
+D:\Git\MilkyWayIME\.worktrees\fluent-caret-diagnostics\build\MilkyWayIME.Tools.TextSurfaceProbe\x64\Debug\mwime_text_surface_probe.exe --sleep 3000 --set "테스트" --msaa-probe --redact-values
+```
+
+Interpret MSAA output narrowly. `OBJID_CARET` coordinates can show where the
+accessibility layer thinks the caret is, but standard MSAA does not expose a
+text offset API for moving an editable caret. Object acquisition, names,
+values, roles, states, or caret rectangles are diagnostic facts, not proof of a
+caret-preserving input backend.
+
+To check whether a separate IME-rendered caret can be visually overlaid without
+changing the focused control, use `--ime-caret-overlay-probe`. The probe shows a
+temporary topmost, no-activate caret marker at the current MSAA caret position,
+falling back to GUI caret or focused element bounds if necessary.
+
+```bat
+D:\Git\MilkyWayIME\.worktrees\fluent-caret-diagnostics\build\MilkyWayIME.Tools.TextSurfaceProbe\x64\Debug\mwime_text_surface_probe.exe --sleep 3000 --ime-caret-overlay-probe --redact-values
+```
+
+The marker can be offset for visual experiments. This is useful for checking
+whether a synthetic IME caret could be drawn near the composed string even when
+the host's real caret remains at the beginning.
+
+```bat
+D:\Git\MilkyWayIME\.worktrees\fluent-caret-diagnostics\build\MilkyWayIME.Tools.TextSurfaceProbe\x64\Debug\mwime_text_surface_probe.exe --sleep 3000 --set "테스트" --ime-caret-overlay-probe --overlay-offset-x 48 --redact-values
+```
+
+This overlay is diagnostic only. It does not move the host caret, does not
+change selection, and must not be treated as a confirmed caret-preserving input
+backend.
 
 For native Win32/RichEdit controls, use `--native-probe` to inspect
 `EM_GETSEL` and text length. This is most useful when UIA reports a non-zero
@@ -172,9 +252,17 @@ D:\Git\MilkyWayIME\build\MilkyWayIME.Tools.TextSurfaceProbe\x64\Debug\mwime_text
 
 Interpretation:
 
-- If `TextPattern.GetSelection()` and `--uia-caret-end` work visibly, a
-  `SetValue()` fallback may be able to restore the caret after whole-value
-  replacement.
+- If `TextPattern.GetSelection()`, `TextPattern2.GetCaretRange()`, and
+  `--set ... --uia-caret-after-set-offset` work visibly, the FluentSearch
+  `SetValue()` backend can restore the caret after whole-value replacement.
+- In the recorded FluentSearch run, `--set "테스트"
+  --uia-caret-after-set-offset 3` wrote the value but left the visible caret at
+  the beginning. Treat UIA offset selection as rejected for FluentSearch until a
+  newer visible test contradicts this result.
+- If `--uia-caret-end` works but an explicit offset does not, keep the runtime
+  policy limited to search-box-end input only.
+- If only `--send-end-after-set` works visibly, treat that as a separate
+  navigation workaround requiring explicit runtime discussion before use.
 - If `EM_GETSEL` and `EM_REPLACESEL` work on an `Edit`/`RichEdit` native HWND
   and the visible UI changes as expected, prefer a native selection-aware
   fallback over UIA `SetValue()`.
